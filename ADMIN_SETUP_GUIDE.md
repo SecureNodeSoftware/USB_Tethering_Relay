@@ -18,15 +18,18 @@ Previously, Windows Mobile Device Center (WMDC) handled IP assignment,
 DHCP, and NAT automatically. WMDC is not supported on Windows 10 1703+
 or Windows 11.
 
-This setup replaces WMDC's functionality with three persistent components:
+This setup replaces WMDC's functionality with four persistent components:
 
 | Component | Purpose | Survives reboot? |
 |-----------|---------|-----------------|
 | WinNAT service | Kernel-level NAT engine | Yes (service set to Automatic) |
 | NAT rule | Routes 192.168.137.0/24 traffic through NAT | Yes (persistent) |
 | Scheduled task | Assigns 192.168.137.1 to RNDIS adapter | Yes (runs as SYSTEM) |
+| Firewall rule | Allows DHCP server (inbound UDP port 67) | Yes (persistent) |
 
 After setup, the USB Relay Manager app runs without admin privileges.
+**Devices receive their IP configuration automatically via DHCP** — no
+manual static IP setup is needed on each device.
 
 ---
 
@@ -266,69 +269,113 @@ Expected: `192.168.137.1` with PrefixLength 24.
   `Get-NetAdapter`.
 - **Task shows "Disabled"** — Right-click → Enable in Task Scheduler, or:
   `Enable-ScheduledTask -TaskName 'USBRelay-RNDIS-IPConfig'`
-- **IP assigned but device can't ping gateway** — Check that the device's
-  static IP is on the same subnet (`192.168.137.x`, mask `255.255.255.0`).
+- **IP assigned but device can't ping gateway** — The device should
+  receive its IP automatically via DHCP (see Step 5). If using a manual
+  static IP as a fallback, check it is on the same subnet
+  (`192.168.137.x`, mask `255.255.255.0`).
 
 ---
 
-## Step 4: Configure the Windows Mobile Device
+## Step 4: Create the DHCP Firewall Rule
 
-On the device, configure a static IP for the USB connection.  The
-settings are the same across all versions — only the navigation path
-differs.
+The USB Relay Manager includes a built-in DHCP server that automatically
+assigns IP configuration to connected devices.  This eliminates the need
+for manual static IP setup on each device.  The DHCP server listens on
+UDP port 67, which requires a Windows Firewall rule to allow inbound
+traffic.
 
-### Static IP settings (all versions)
+### Create the firewall rule
+
+```powershell
+New-NetFirewallRule `
+    -DisplayName 'USBRelay-DHCP-Server' `
+    -Description 'Allows USB Relay Manager DHCP server to configure connected devices' `
+    -Direction Inbound `
+    -Protocol UDP `
+    -LocalPort 67 `
+    -Action Allow `
+    -Profile Private,Public
+```
+
+### Verify
+
+```powershell
+Get-NetFirewallRule -DisplayName 'USBRelay-DHCP-Server' | Select-Object DisplayName, Enabled, Direction
+```
+
+Expected output:
+```
+DisplayName            Enabled Direction
+-----------            ------- ---------
+USBRelay-DHCP-Server      True   Inbound
+```
+
+### Troubleshooting
+
+- **"Access is denied"** — You are not running as administrator.
+- **DHCP not working after setup** — Verify the rule is enabled and that
+  no other application is already using UDP port 67.  If the Windows
+  DHCP Server role is installed, it may conflict.
+
+---
+
+## Step 5: Device Configuration (Automatic via DHCP)
+
+**In most cases, no manual device configuration is needed.**  When a
+device connects via USB, the USB Relay Manager's DHCP server
+automatically provides:
 
 | Setting | Value |
 |---------|-------|
 | IP Address | `192.168.137.2` |
 | Subnet Mask | `255.255.255.0` |
 | Default Gateway | `192.168.137.1` |
-| DNS Server | `192.168.137.1` or `8.8.8.8` |
+| DNS Server | Auto-detected from host (falls back to `8.8.8.8`) |
 
-**Note:** If using `192.168.137.1` as DNS, the host must be able to
-forward DNS queries (WinNAT handles this). Using `8.8.8.8` directly
-requires the device's DNS packets to reach Google's servers through NAT,
-which WinNAT also handles.
+The device must be set to obtain its IP address automatically (DHCP),
+which is the default on most Windows Mobile/CE devices.
 
-### Windows Embedded Handheld 6.5 (e.g. Intermec CN70)
+### Fallback: Manual static IP (if DHCP is unavailable)
+
+If the device does not support DHCP on the RNDIS adapter, or if the DHCP
+server cannot start (e.g. port 67 is in use), you can still configure a
+static IP manually using the settings above.
+
+#### Windows Embedded Handheld 6.5 (e.g. Intermec CN70)
 
 1. **Disable ActiveSync networking** (critical):
    Start → Settings → Connections → **USB to PC** →
    **uncheck** "Enable advanced network functionality"
 
    > If this box is checked, Windows Mobile tries to use ActiveSync/WMDC
-   > networking over USB, which conflicts with static IP configuration.
+   > networking over USB, which conflicts with IP configuration.
 
-2. **Assign the static IP**:
-   Start → Settings → Connections → Connections → **Advanced** tab →
-   **Select Networks** → edit the network that contains "Work" →
-   **Proxy Settings** / **Network Cards** tab →
-   select the RNDIS adapter → **Use specific IP address** →
-   enter the values from the table above
+2. **Set to DHCP (recommended)** or assign a static IP:
+   Start → Settings → Connections → **Network Cards** →
+   tap the RNDIS or USB adapter → select **Use server-assigned IP address**
 
-   Alternatively: Settings → Connections → **Network Cards** →
-   tap the RNDIS or USB adapter → enter the static IP settings.
+   For static IP: select **Use specific IP address** and enter the values
+   from the table above.
 
-### Windows Mobile 5.0 (e.g. Intermec CN3)
+#### Windows Mobile 5.0 (e.g. Intermec CN3)
 
 1. Start → Settings → Connections → **Network Cards** tab
 2. Tap the RNDIS or USB network adapter in the list
-3. Select **Use specific IP address**
-4. Enter the values from the table above
-5. Tap OK and soft-reset if prompted
+3. Select **Use server-assigned IP address** (for DHCP) or
+   **Use specific IP address** (for static) and enter the values above
+4. Tap OK and soft-reset if prompted
 
 > WM 5.0 does not have a "USB to PC" toggle.  RNDIS is always active
 > when the device is connected via USB.
 
-### Windows Mobile 2003 / Pocket PC (e.g. Intermec 700C)
+#### Windows Mobile 2003 / Pocket PC (e.g. Intermec 700C)
 
 1. Start → Settings → **Connections** tab → **Connections**
 2. Tap **Advanced** → **Network Adapters** (or **Network Cards**)
 3. Select the USB or RNDIS adapter from the list
-4. Select **Use specific IP address**
-5. Enter the values from the table above
-6. Tap OK and soft-reset if prompted
+4. Select **Use server-assigned IP address** (for DHCP) or
+   **Use specific IP address** (for static) and enter the values above
+5. Tap OK and soft-reset if prompted
 
 > On WM 2003 the adapter may appear as "USB" rather than "RNDIS" in the
 > list.  It is the same physical adapter — select whichever entry appears
@@ -353,20 +400,31 @@ After completing all steps, verify the full chain:
 (Get-ScheduledTask -TaskName 'USBRelay-RNDIS-IPConfig').State
 # Expected: Ready
 
-# 4. (With device connected) IP assigned
+# 4. Firewall rule exists and enabled
+(Get-NetFirewallRule -DisplayName 'USBRelay-DHCP-Server').Enabled
+# Expected: True
+
+# 5. (With device connected) IP assigned
 Get-NetIPAddress -InterfaceAlias '*RNDIS*','*Remote NDIS*' `
     -IPAddress '192.168.137.1' -ErrorAction SilentlyContinue
 # Expected: Shows IP address entry
 ```
 
-All four checks passing means standard users can launch USB Relay Manager
-in Windows Mobile mode without administrator privileges.
+All five checks passing means standard users can launch USB Relay Manager
+in Windows Mobile mode without administrator privileges.  Connected
+devices will receive their IP configuration automatically via DHCP.
 
 ---
 
 ## Removing the Configuration
 
 To undo all changes:
+
+### Remove the firewall rule
+
+```powershell
+Remove-NetFirewallRule -DisplayName 'USBRelay-DHCP-Server'
+```
 
 ### Remove the scheduled task
 
@@ -400,10 +458,13 @@ Set-Service -Name 'winnat' -StartupType Manual
 | NAT rule name | `USBRelayNAT` |
 | NAT subnet | `192.168.137.0/24` |
 | Gateway IP (host side) | `192.168.137.1` |
-| Device IP | `192.168.137.2` |
+| Device IP (via DHCP) | `192.168.137.2` |
 | Scheduled task name | `USBRelay-RNDIS-IPConfig` |
 | Task runs as | `SYSTEM` |
 | Task interval | Every 30 seconds |
 | Task matches adapters | `InterfaceDescription -match 'RNDIS\|Remote NDIS'` |
+| Firewall rule name | `USBRelay-DHCP-Server` |
+| DHCP server port | UDP 67 (inbound) |
 
-These values must match the constants in `src/wmdc_monitor.py`.
+These values must match the constants in `src/wmdc_monitor.py` and
+`src/dhcp_server.py`.
