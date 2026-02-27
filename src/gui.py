@@ -14,7 +14,10 @@ from tkinter import ttk, scrolledtext, filedialog
 from datetime import datetime
 from typing import Dict, Callable, Optional
 from pathlib import Path
+import sys
 import webbrowser
+
+IS_WINDOWS = sys.platform == 'win32'
 
 # SCAN Brand Colors
 SCAN_BRAND_BLUE = '#4169E1'  # Royal Blue
@@ -161,6 +164,8 @@ class USBRelayApp:
         self.device_id: Optional[str] = None
         self.relay_manager = None
         self.adb_monitor = None
+        self.wmdc_monitor = None
+        self._active_mode: Optional[str] = None  # tracks which mode is currently running
 
         self._setup_ui()
         self._setup_managers()
@@ -220,6 +225,38 @@ class USBRelayApp:
         )
         self.stop_btn.pack(side=tk.LEFT, padx=10)
         self.stop_btn.set_enabled(False)
+
+        # Device mode selector (only show Windows Mobile option on Windows)
+        self.device_mode = tk.StringVar(value='android')
+        mode_frame = tk.Frame(main_frame, bg=BG_COLOR)
+        mode_frame.pack(pady=(5, 0))
+
+        tk.Radiobutton(
+            mode_frame,
+            text="Android (CN80G)",
+            variable=self.device_mode,
+            value='android',
+            font=('Arial', 9),
+            bg=BG_COLOR,
+            fg=TEXT_COLOR,
+            selectcolor=BG_COLOR,
+            activebackground=BG_COLOR,
+            command=self._on_mode_change
+        ).pack(side=tk.LEFT, padx=(0, 10))
+
+        if IS_WINDOWS:
+            tk.Radiobutton(
+                mode_frame,
+                text="Windows Mobile",
+                variable=self.device_mode,
+                value='winmobile',
+                font=('Arial', 9),
+                bg=BG_COLOR,
+                fg=TEXT_COLOR,
+                selectcolor=BG_COLOR,
+                activebackground=BG_COLOR,
+                command=self._on_mode_change
+            ).pack(side=tk.LEFT)
 
         # Status frame
         status_frame = tk.Frame(main_frame, bg=BG_COLOR)
@@ -358,7 +395,7 @@ class USBRelayApp:
         ).pack()
 
     def _setup_managers(self):
-        """Initialize relay and ADB managers."""
+        """Initialize relay, ADB, and (on Windows) WMDC managers."""
         from relay_manager import RelayManager
         from adb_monitor import ADBMonitor
 
@@ -375,28 +412,66 @@ class USBRelayApp:
             on_log=self.log
         )
 
+        # Windows Mobile monitor (Windows-only)
+        if IS_WINDOWS:
+            try:
+                from wmdc_monitor import WMDCMonitor
+                self.wmdc_monitor = WMDCMonitor(
+                    on_device_connected=self._on_device_connected,
+                    on_device_disconnected=self._on_device_disconnected,
+                    on_log=self.log
+                )
+            except ImportError:
+                self.wmdc_monitor = None
+
     def _on_start(self):
         """Handle Start button click."""
-        self.log("Starting relay server...", 'info')
+        mode = self.device_mode.get()
         self.start_btn.set_enabled(False)
         self.stop_btn.set_enabled(True)
         self.update_status('starting')
 
-        # Start ADB monitoring and relay
-        self.adb_monitor.start()
-        self.relay_manager.start()
+        if mode == 'winmobile':
+            if not self.wmdc_monitor:
+                self.log("Windows Mobile mode not available", 'error')
+                self.start_btn.set_enabled(True)
+                self.stop_btn.set_enabled(False)
+                self.update_status('stopped')
+                return
+            self.log("Starting Windows Mobile tethering...", 'info')
+            self.wmdc_monitor.start()
+            self.update_status('waiting')
+        else:
+            self.log("Starting relay server...", 'info')
+            self.adb_monitor.start()
+            self.relay_manager.start()
+
+        self._active_mode = mode
 
     def _on_stop(self):
         """Handle Stop button click."""
-        self.log("Stopping relay server...", 'info')
         self.start_btn.set_enabled(True)
         self.stop_btn.set_enabled(False)
 
-        # Stop everything
-        self.relay_manager.stop()
-        self.adb_monitor.stop()
+        if self._active_mode == 'winmobile':
+            self.log("Stopping Windows Mobile tethering...", 'info')
+            if self.wmdc_monitor:
+                self.wmdc_monitor.stop()
+        else:
+            self.log("Stopping relay server...", 'info')
+            self.relay_manager.stop()
+            self.adb_monitor.stop()
+
+        self._active_mode = None
         self.update_status('stopped')
         self.device_label.config(text="Device: None")
+
+    def _on_mode_change(self):
+        """Handle mode radio button change while running."""
+        if self._active_mode and self._active_mode != self.device_mode.get():
+            # Stop current mode and start the new one
+            self._on_stop()
+            self._on_start()
 
     def _on_relay_output(self, line: str):
         """Handle output from relay process."""
@@ -412,7 +487,11 @@ class USBRelayApp:
         self.device_label.config(text=f"Device: {device_id}")
         self.log(f"Device connected: {device_id}", 'success')
 
-        if self.relay_manager.is_running():
+        is_active = (
+            (self._active_mode == 'winmobile' and self.wmdc_monitor and self.wmdc_monitor.is_running())
+            or (self._active_mode == 'android' and self.relay_manager.is_running())
+        )
+        if is_active:
             self.update_status('connected')
 
     def _on_device_disconnected(self):
@@ -421,7 +500,11 @@ class USBRelayApp:
         self.device_label.config(text="Device: None")
         self.log("Device disconnected", 'warning')
 
-        if self.relay_manager.is_running():
+        is_active = (
+            (self._active_mode == 'winmobile' and self.wmdc_monitor and self.wmdc_monitor.is_running())
+            or (self._active_mode == 'android' and self.relay_manager.is_running())
+        )
+        if is_active:
             self.update_status('waiting')
 
     def update_status(self, status: str):
@@ -496,5 +579,9 @@ class USBRelayApp:
         # Stop ADB monitor and kill ADB server
         if self.adb_monitor:
             self.adb_monitor.stop(kill_server=True)
+
+        # Stop Windows Mobile monitor
+        if self.wmdc_monitor and self.wmdc_monitor.is_running():
+            self.wmdc_monitor.stop()
 
         self.root.destroy()

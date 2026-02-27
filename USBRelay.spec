@@ -14,7 +14,7 @@ a = Analysis(
         ('resources/scan_icon.ico', '.'),
         ('resources/gnirehtet.apk', '.'),
     ],
-    hiddenimports=['gui', 'relay_manager', 'adb_monitor'],
+    hiddenimports=['gui', 'relay_manager', 'adb_monitor', 'wmdc_monitor'],
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],

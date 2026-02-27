@@ -1,12 +1,14 @@
 # USB Relay Manager
 
-A desktop application for USB reverse tethering on Android devices. Enables network connectivity for devices connected via USB by routing traffic through the host computer's internet connection.
+A desktop application for USB reverse tethering on Android and Windows Mobile/CE devices. Enables network connectivity for devices connected via USB by routing traffic through the host computer's internet connection.
 
 Built on [gnirehtet](https://github.com/Genymobile/gnirehtet) by Genymobile (Apache 2.0).
 
 ## Overview
 
-USB reverse tethering allows a mobile device to use a computer's internet connection through a USB cable. This is designed for Honeywell CN80G devices that need network connectivity when docked via USB.
+USB reverse tethering allows a mobile device to use a computer's internet connection through a USB cable. Supports two device modes:
+
+**Android Mode** — For Honeywell CN80G devices using ADB + gnirehtet VPN relay:
 
 ```
 ┌─────────────────┐         USB          ┌─────────────────┐
@@ -21,6 +23,23 @@ USB reverse tethering allows a mobile device to use a computer's internet connec
                                               Internet
 ```
 
+**Windows Mobile Mode** — For Windows Mobile/CE scanners (Honeywell CK65, Zebra MC3300, etc.) using RNDIS + WinNAT (Windows only):
+
+```
+┌─────────────────┐    USB RNDIS (local link)    ┌─────────────────┐
+│  WinMobile/CE   │◄───────────────────────────►│  Host PC        │
+│  Scanner        │                              │                 │
+│                 │   Static IP: 192.168.137.2   │  192.168.137.1  │
+│                 │   Gateway:   192.168.137.1   │  (NAT gateway)  │
+│                 │   DNS:       8.8.8.8         │                 │
+└─────────────────┘                              └────────┬────────┘
+                                                          │
+                                                     NAT translates
+                                                          │
+                                                          ▼
+                                                   Internet / LAN
+```
+
 ## Supported Platforms
 
 | Platform | Output | Status |
@@ -30,38 +49,42 @@ USB reverse tethering allows a mobile device to use a computer's internet connec
 
 ## Quick Start
 
-### Windows
+### Android Mode (Windows / macOS)
 
-1. Download `USBRelay.exe` from Tangent (or build from source)
-2. Double-click to run - relay starts automatically
+1. Download `USBRelay.exe` (Windows) or `USBRelay.app.zip` (macOS)
+2. Run the application — relay starts automatically in Android mode
 3. Connect CN80G device via USB dock
 4. Approve USB debugging on device when prompted
 5. Approve VPN permission on device (first time only)
 6. Device is now online
 
-### macOS
+**macOS note**: Right-click and select "Open" (first time, to bypass Gatekeeper). You may need to allow the app in System Settings > Privacy & Security.
 
-1. Download `USBRelay.app.zip` from Tangent (or build from source)
-2. Extract and move to Applications (or run from Downloads)
-3. Right-click and select "Open" (first time, to bypass Gatekeeper)
-4. Relay starts automatically
-5. Connect CN80G device via USB dock
-6. Approve USB debugging on device when prompted
-7. Approve VPN permission on device (first time only)
-8. Device is now online
+### Windows Mobile Mode (Windows only)
 
-**macOS note**: You may need to allow the app in System Settings > Privacy & Security if macOS blocks it.
+1. Run `USBRelay.exe` **as Administrator** (right-click → Run as administrator)
+2. Select the **"Windows Mobile"** radio button in the GUI
+3. Click **START**
+4. Connect the Windows Mobile/CE device via USB
+5. On the device, configure a static IP:
+   - IP: `192.168.137.2`
+   - Subnet mask: `255.255.255.0`
+   - Gateway: `192.168.137.1`
+   - DNS: `8.8.8.8` (or match your host DNS)
+6. Device is now online
 
 ## Features
 
+- **Dual mode**: Android (ADB/gnirehtet) and Windows Mobile (RNDIS/WinNAT)
 - Single-file portable application (no installation required)
 - Start/Stop buttons with visual status indicator
-- Auto-start relay on launch
+- Auto-start relay on launch (Android mode)
 - Automatic device detection and tunnel setup
 - Automatic reconnection when device is unplugged/replugged
+- WinNAT → ICS → IP Forwarding fallback chain (Windows Mobile mode)
 - Automatic DNS server detection from host system
 - Scrolling log panel with timestamps and log export
-- Cross-platform (Windows and macOS)
+- Cross-platform (Windows and macOS; Windows Mobile mode is Windows-only)
 
 ## Project Structure
 
@@ -69,9 +92,10 @@ USB reverse tethering allows a mobile device to use a computer's internet connec
 TETHERING_TOOL/
 ├── src/                  # Python source code
 │   ├── main.py           # Entry point - resource extraction and app launch
-│   ├── gui.py            # Tkinter GUI with SCAN branding
+│   ├── gui.py            # Tkinter GUI (Android + Windows Mobile modes)
 │   ├── relay_manager.py  # Gnirehtet relay subprocess manager
-│   └── adb_monitor.py    # ADB device detection and tunnel setup
+│   ├── adb_monitor.py    # ADB device detection and tunnel setup
+│   └── wmdc_monitor.py   # Windows Mobile RNDIS detection + WinNAT/ICS config
 ├── resources/            # Bundled binaries and assets
 │   ├── adb.exe           # Android Debug Bridge (Windows)
 │   ├── AdbWinApi.dll     # ADB Windows API DLL
@@ -178,19 +202,55 @@ The first time USB tethering is enabled, Android will prompt for VPN permission.
 2. Check ADB tunnel: `adb reverse --list`
 3. Stop and restart the relay using the GUI buttons
 
-### Connected but device has no internet
+### Connected but device has no internet (Android)
 
 1. Verify the computer itself has internet access
 2. Check if a firewall is blocking port 31416
 3. DNS issues: the relay auto-detects DNS from the host. Falls back to Google DNS (8.8.8.8) if detection fails
 
+### Windows Mobile: RNDIS adapter not detected
+
+1. Check USB cable/dock is properly connected
+2. Verify the device driver is installed (should appear as "Remote NDIS" in Device Manager)
+3. Try a different USB port
+
+### Windows Mobile: WinNAT failed
+
+1. Run `Get-NetNat` in PowerShell to check for conflicting NAT networks
+2. Docker Desktop or WSL2 may conflict — stop them or let ICS fallback handle it
+3. Ensure you're running as Administrator
+
+### Windows Mobile: ICS failed
+
+1. Run as Administrator (required for ICS COM objects)
+2. Check Windows Network Connections for existing ICS sharing and disable it
+3. Verify the host PC has an active internet connection
+
+### Windows Mobile: Device connected but no internet
+
+1. Verify device static IP is `192.168.137.2`, gateway is `192.168.137.1`
+2. Verify PC has internet access
+3. Check the log panel for which NAT method was applied
+4. Try `ping 192.168.137.1` from the device to confirm the USB link is up
+
 ## Technical Details
+
+### Android Mode
 
 - **Relay Port**: 31416 (TCP)
 - **VPN Address**: 172.16.0.2/32
 - **DNS**: Auto-detected from host system (falls back to 8.8.8.8)
 - **Default Route**: 0.0.0.0/0 (all traffic)
 - **ADB Reverse**: `localabstract:gnirehtet` -> TCP 31416
+
+### Windows Mobile Mode
+
+- **NAT Method**: WinNAT (primary) → ICS (fallback) → IP Forwarding (last resort)
+- **Subnet**: `192.168.137.0/24`
+- **PC Gateway IP**: `192.168.137.1`
+- **Device Static IP**: `192.168.137.2`
+- **Requires**: Run as Administrator
+- **Platform**: Windows only
 
 ## License
 
