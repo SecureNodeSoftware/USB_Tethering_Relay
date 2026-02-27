@@ -1,194 +1,63 @@
-# USB Relay Manager for SCAN Mobile
+# -*- mode: python ; coding: utf-8 -*-
+# USBRelay.macos.spec - PyInstaller spec for macOS build
 
-This directory contains tools for setting up the USB relay server, which enables USB reverse tethering for Honeywell CN80G devices.
+a = Analysis(
+    ['src/main.py'],
+    pathex=[],
+    binaries=[],
+    datas=[
+        ('resources/scan_logo.png', '.'),
+        ('resources/gnirehtet.apk', '.'),
+    ],
+    hiddenimports=['gui', 'relay_manager', 'adb_monitor'],
+    hookspath=[],
+    hooksconfig={},
+    runtime_hooks=[],
+    excludes=[],
+    noarchive=False,
+)
 
-Based on [gnirehtet](https://github.com/Genymobile/gnirehtet) by Genymobile, licensed under Apache 2.0.
+pyz = PYZ(a.pure)
 
-## Supported Platforms
+exe = EXE(
+    pyz,
+    a.scripts,
+    [],
+    exclude_binaries=True,
+    name='USBRelay',
+    debug=False,
+    bootloader_ignore_signals=False,
+    strip=False,
+    upx=True,
+    runtime_tmpdir=None,
+    console=False,
+    disable_windowed_traceback=False,
+    argv_emulation=False,
+    target_arch=None,
+    codesign_identity=None,
+    entitlements_file=None,
+)
 
-| Platform | Output | Status |
-|----------|--------|--------|
-| Windows  | `USBRelay.exe` (~25 MB) | Available |
-| macOS    | `USBRelay.app` (.zip ~30 MB) | Available |
+coll = COLLECT(
+    exe,
+    a.binaries,
+    a.datas,
+    strip=False,
+    upx=True,
+    upx_exclude=[],
+    name='USBRelay',
+)
 
-## GUI Application (Recommended)
-
-The **USB Relay Manager** is a standalone application with a graphical interface. No installation required - just download and run.
-
-### Features
-- Single-file portable application (no installation required)
-- SCAN brand logo with clean interface
-- Start/Stop buttons with visual status indicator
-- Auto-start relay on launch
-- Automatic device detection and tunnel setup
-- Automatic reconnection when device is unplugged/replugged
-- Automatic DNS server detection from host system
-- Scrolling log panel with timestamps
-- Cross-platform (Windows and macOS)
-
-### Hosted Download
-
-The USB Relay Manager is available for download directly from Tangent:
-
-1. Log in to Tangent
-2. Navigate to **USB Relay** in the Device menu
-3. Download the version for your operating system
-4. Run the application (no installation needed)
-
----
-
-## Building from Source
-
-### Prerequisites
-- Python 3.8+
-- PyInstaller (`pip install pyinstaller`)
-
-### Building for Windows
-
-```bash
-cd tools/usb-relay
-
-# Install build dependencies
-pip install -r requirements.txt
-
-# Build the executable
-python build.py --windows
-```
-
-**Required resources** in `resources/`:
-- `gnirehtet.exe` - Relay server binary
-- `adb.exe` - Android Debug Bridge
-- `AdbWinApi.dll` - ADB Windows DLL (optional, auto-detected)
-- `AdbWinUsbApi.dll` - ADB USB DLL (optional, auto-detected)
-- `scan_logo.png` - SCAN brand logo
-- `scan_icon.ico` - Windows icon
-
-Output: `dist/USBRelay.exe`
-
-### Building for macOS
-
-```bash
-cd tools/usb-relay
-
-# Install build dependencies
-pip install -r requirements.txt
-
-# Build the .app bundle
-python build.py --macos
-```
-
-**Required resources** in `resources/`:
-- `gnirehtet` - Relay server binary (no extension)
-- `adb` - Android Debug Bridge (no extension)
-- `scan_logo.png` - SCAN brand logo
-- `scan_icon.icns` - macOS icon (optional)
-
-**Obtaining macOS binaries:**
-- **gnirehtet**: Download from [gnirehtet releases](https://github.com/Genymobile/gnirehtet/releases) or build from Rust source (`cargo build --release`)
-- **adb**: Download [Android SDK Platform Tools for macOS](https://developer.android.com/tools/releases/platform-tools)
-
-Output: `dist/USBRelay.app` and `dist/USBRelay.app.zip`
-
----
-
-## What is USB Reverse Tethering?
-
-USB reverse tethering allows a mobile device to use a computer's internet connection through a USB cable. This is useful for CN80G devices without WiFi/cellular radios that need network connectivity when docked to a computer via USB.
-
-```
-┌─────────────────┐         USB          ┌─────────────────┐
-│   CN80G Device  │◄────────────────────►│    Computer     │
-│                 │                       │                 │
-│  VPN Service    │      ADB Tunnel      │  Relay Server   │
-│  (USB Relay)    │◄────────────────────►│  (USB Relay)    │
-│                 │                       │                 │
-└─────────────────┘                       └────────┬────────┘
-                                                   │
-                                                   ▼
-                                              Internet
-```
-
-## Quick Start
-
-### Windows
-
-1. Download `USBRelay.exe` from Tangent (or build from source)
-2. Double-click to run - relay starts automatically
-3. Connect CN80G device via USB dock
-4. Approve USB debugging on device when prompted
-5. Approve VPN permission on device (first time only)
-6. Device is now online
-
-### macOS
-
-1. Download `USBRelay.app.zip` from Tangent (or build from source)
-2. Extract and move to Applications (or run from Downloads)
-3. Right-click and select "Open" (first time, to bypass Gatekeeper)
-4. Relay starts automatically
-5. Connect CN80G device via USB dock
-6. Approve USB debugging on device when prompted
-7. Approve VPN permission on device (first time only)
-8. Device is now online
-
-**macOS note**: You may need to allow the app in System Settings > Privacy & Security if macOS blocks it.
-
----
-
-## Command Line Tools (Alternative)
-
-For scripted or headless environments on Windows, use the batch script:
-
-```batch
-install-relay-windows.bat install   # Download and install gnirehtet
-install-relay-windows.bat start     # Start relay server
-install-relay-windows.bat stop      # Stop relay server
-install-relay-windows.bat status    # Show installation and connection status
-install-relay-windows.bat autorun   # Start relay with automatic device detection
-```
-
-## Troubleshooting
-
-### Device not detected after docking
-
-1. Check USB cable/dock is properly connected
-2. Enable USB debugging on device (Settings > Developer Options > USB Debugging)
-3. Run `adb devices` to verify connection
-4. If device shows "unauthorized", check device screen for authorization prompt
-5. Try a different USB port
-
-### macOS: "USBRelay.app is damaged" or cannot be opened
-
-macOS Gatekeeper may block unsigned applications:
-1. Right-click the app and select "Open"
-2. Click "Open" in the dialog that appears
-3. Or: System Settings > Privacy & Security > "Open Anyway"
-
-### "VPN permission denied"
-
-The first time USB tethering is enabled, Android will prompt for VPN permission. This must be approved for tethering to work.
-
-### "Relay disconnected" notification on device
-
-1. Ensure USB Relay Manager is running on computer
-2. Check ADB tunnel: `adb reverse --list`
-3. Stop and restart the relay using the GUI buttons
-
-### Relay shows "Connected" but device has no internet
-
-1. Verify the computer itself has internet access
-2. Check if a firewall is blocking port 31416
-3. DNS issues: the relay auto-detects DNS from the host. Falls back to Google DNS (8.8.8.8) if detection fails
-
-## Technical Details
-
-- **Relay Port**: 31416 (TCP)
-- **VPN Address**: 172.16.0.2/32
-- **DNS**: Auto-detected from host system (falls back to 8.8.8.8)
-- **Default Route**: 0.0.0.0/0 (all traffic)
-- **ADB Reverse**: `localabstract:gnirehtet` → TCP 31416
-
-## Credits & License
-
-USB Relay Manager is based on [gnirehtet](https://github.com/Genymobile/gnirehtet) developed by Genymobile and licensed under Apache 2.0.
-
-SCAN Mobile modifications are also licensed under Apache 2.0.
+app = BUNDLE(
+    coll,
+    name='USBRelay.app',
+    icon=None,
+    bundle_identifier='com.scan.usbrelay',
+    info_plist={
+        'CFBundleName': 'USB Relay Manager',
+        'CFBundleDisplayName': 'USB Relay Manager',
+        'CFBundleShortVersionString': '1.0.0',
+        'CFBundleVersion': '1.0.0',
+        'NSHighResolutionCapable': True,
+    },
+)

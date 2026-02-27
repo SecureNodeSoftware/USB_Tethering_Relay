@@ -1,236 +1,199 @@
-#!/usr/bin/env python3
-"""
-USB Relay Manager - Build Script
+# USB Relay Manager
 
-Automates the PyInstaller build process to create the final executable.
-Supports both Windows (.exe) and macOS (.app) builds.
+A desktop application for USB reverse tethering on Android devices. Enables network connectivity for devices connected via USB by routing traffic through the host computer's internet connection.
 
-Usage:
-  python build.py              # Auto-detect platform
-  python build.py --windows    # Force Windows build
-  python build.py --macos      # Force macOS build
+Built on [gnirehtet](https://github.com/Genymobile/gnirehtet) by Genymobile (Apache 2.0).
 
-Based on gnirehtet by Genymobile (https://github.com/Genymobile/gnirehtet)
-Licensed under Apache 2.0
-"""
+## Overview
 
-import os
-import sys
-import shutil
-import subprocess
-from pathlib import Path
+USB reverse tethering allows a mobile device to use a computer's internet connection through a USB cable. This is designed for Honeywell CN80G devices that need network connectivity when docked via USB.
 
-IS_WINDOWS = sys.platform == 'win32'
-IS_MACOS = sys.platform == 'darwin'
+```
+┌─────────────────┐         USB          ┌─────────────────┐
+│   CN80G Device  │◄────────────────────►│    Computer     │
+│                 │                       │                 │
+│  VPN Service    │      ADB Tunnel      │  Relay Server   │
+│  (USB Relay)    │◄────────────────────►│  (USB Relay)    │
+│                 │                       │                 │
+└─────────────────┘                       └────────┬────────┘
+                                                   │
+                                                   ▼
+                                              Internet
+```
 
+## Supported Platforms
 
-def check_resources(project_dir: Path, platform: str) -> bool:
-    """Verify all required resources are present for the target platform."""
-    resources_dir = project_dir / 'resources'
+| Platform | Output | Status |
+|----------|--------|--------|
+| Windows  | `USBRelay.exe` (~25 MB) | Available |
+| macOS    | `USBRelay.app` (.zip ~30 MB) | Available |
 
-    if platform == 'windows':
-        required_files = ['gnirehtet.exe', 'adb.exe']
-    else:
-        required_files = ['gnirehtet', 'adb']
+## Quick Start
 
-    missing = []
-    for filename in required_files:
-        if not (resources_dir / filename).exists():
-            missing.append(filename)
+### Windows
 
-    if missing:
-        print(f"ERROR: Missing required resources for {platform}:")
-        for f in missing:
-            print(f"  - {f}")
-        print(f"\nPlease ensure these files are in: {resources_dir}")
+1. Download `USBRelay.exe` from Tangent (or build from source)
+2. Double-click to run - relay starts automatically
+3. Connect CN80G device via USB dock
+4. Approve USB debugging on device when prompted
+5. Approve VPN permission on device (first time only)
+6. Device is now online
 
-        if platform == 'macos':
-            print("\nTo obtain macOS binaries:")
-            print("  gnirehtet: Download from https://github.com/Genymobile/gnirehtet/releases")
-            print("             or build from source: cargo build --release")
-            print("  adb:       Download Android SDK Platform Tools for macOS from")
-            print("             https://developer.android.com/tools/releases/platform-tools")
-        return False
+### macOS
 
-    return True
+1. Download `USBRelay.app.zip` from Tangent (or build from source)
+2. Extract and move to Applications (or run from Downloads)
+3. Right-click and select "Open" (first time, to bypass Gatekeeper)
+4. Relay starts automatically
+5. Connect CN80G device via USB dock
+6. Approve USB debugging on device when prompted
+7. Approve VPN permission on device (first time only)
+8. Device is now online
 
+**macOS note**: You may need to allow the app in System Settings > Privacy & Security if macOS blocks it.
 
-def clean_build(project_dir: Path):
-    """Clean previous build artifacts."""
-    dirs_to_clean = ['build', 'dist', '__pycache__']
+## Features
 
-    for dir_name in dirs_to_clean:
-        dir_path = project_dir / dir_name
-        if dir_path.exists():
-            print(f"Cleaning {dir_path}...")
-            try:
-                shutil.rmtree(dir_path)
-            except PermissionError as e:
-                print(f"WARNING: Could not delete {dir_path}")
-                print(f"  {e}")
-                if IS_WINDOWS:
-                    print("  Close any running USBRelay.exe and try again.")
-                    print("  Or run: taskkill /f /im USBRelay.exe")
-                else:
-                    print("  Close any running USBRelay and try again.")
-                    print("  Or run: pkill -f USBRelay")
-                return False
+- Single-file portable application (no installation required)
+- Start/Stop buttons with visual status indicator
+- Auto-start relay on launch
+- Automatic device detection and tunnel setup
+- Automatic reconnection when device is unplugged/replugged
+- Automatic DNS server detection from host system
+- Scrolling log panel with timestamps and log export
+- Cross-platform (Windows and macOS)
 
-    # Clean pycache in src
-    src_pycache = project_dir / 'src' / '__pycache__'
-    if src_pycache.exists():
-        try:
-            shutil.rmtree(src_pycache)
-        except PermissionError:
-            pass  # Ignore pycache errors
+## Project Structure
 
-    return True
+```
+TETHERING_TOOL/
+├── src/                  # Python source code
+│   ├── main.py           # Entry point - resource extraction and app launch
+│   ├── gui.py            # Tkinter GUI with SCAN branding
+│   ├── relay_manager.py  # Gnirehtet relay subprocess manager
+│   └── adb_monitor.py    # ADB device detection and tunnel setup
+├── resources/            # Bundled binaries and assets
+│   ├── adb.exe           # Android Debug Bridge (Windows)
+│   ├── AdbWinApi.dll     # ADB Windows API DLL
+│   ├── AdbWinUsbApi.dll  # ADB Windows USB API DLL
+│   ├── gnirehtet.exe     # Gnirehtet relay server (Windows)
+│   ├── gnirehtet.apk     # Gnirehtet APK for device-side VPN
+│   ├── app_icon.png      # Application icon (512x512)
+│   ├── scan_logo.png     # SCAN brand logo
+│   └── scan_icon.ico     # Windows icon
+├── scripts/              # Command-line tools
+│   └── install-relay-windows.bat  # Windows CLI installer/manager
+├── build.py              # PyInstaller build script
+├── USBRelay.spec         # PyInstaller spec (Windows)
+├── USBRelay.macos.spec   # PyInstaller spec (macOS)
+├── requirements.txt      # Python dependencies
+├── LICENSE               # GPL v3
+└── README.md
+```
 
+## Building from Source
 
-def run_pyinstaller(project_dir: Path, platform: str) -> bool:
-    """Run PyInstaller to build the executable."""
-    if platform == 'macos':
-        spec_file = project_dir / 'USBRelay.macos.spec'
-    else:
-        spec_file = project_dir / 'USBRelay.spec'
+### Prerequisites
 
-    if not spec_file.exists():
-        print(f"ERROR: Spec file not found: {spec_file}")
-        return False
+- Python 3.8+
+- PyInstaller (`pip install pyinstaller`)
 
-    print(f"\nBuilding {platform} application with PyInstaller...")
-    print("-" * 50)
+### Windows
 
-    try:
-        result = subprocess.run(
-            [sys.executable, '-m', 'PyInstaller', str(spec_file), '--clean'],
-            cwd=str(project_dir),
-            check=True
-        )
-        return result.returncode == 0
-    except subprocess.CalledProcessError as e:
-        print(f"ERROR: PyInstaller failed with code {e.returncode}")
-        return False
-    except FileNotFoundError:
-        print("ERROR: PyInstaller not found. Install with: pip install pyinstaller")
-        return False
+```bash
+# Install build dependencies
+pip install -r requirements.txt
 
+# Build the executable
+python build.py --windows
+```
 
-def verify_output(project_dir: Path, platform: str) -> bool:
-    """Verify the build output exists."""
-    if platform == 'macos':
-        app_path = project_dir / 'dist' / 'USBRelay.app'
-        if app_path.exists():
-            # Calculate total .app bundle size
-            total_size = sum(
-                f.stat().st_size for f in app_path.rglob('*') if f.is_file()
-            )
-            size_mb = total_size / (1024 * 1024)
-            print(f"\nBuild successful!")
-            print(f"Output: {app_path}")
-            print(f"Size: {size_mb:.1f} MB")
+**Required resources** in `resources/`:
+- `gnirehtet.exe` - Relay server binary
+- `adb.exe` - Android Debug Bridge
+- `AdbWinApi.dll` - ADB Windows DLL
+- `AdbWinUsbApi.dll` - ADB USB DLL
+- `scan_logo.png` - SCAN brand logo
+- `scan_icon.ico` - Windows icon
 
-            # Create zip for distribution
-            zip_path = project_dir / 'dist' / 'USBRelay.app.zip'
-            print(f"\nCreating distribution archive: {zip_path}")
-            shutil.make_archive(
-                str(project_dir / 'dist' / 'USBRelay.app'),
-                'zip',
-                str(project_dir / 'dist'),
-                'USBRelay.app'
-            )
-            if zip_path.exists():
-                zip_mb = zip_path.stat().st_size / (1024 * 1024)
-                print(f"Archive: {zip_path} ({zip_mb:.1f} MB)")
-            return True
-        else:
-            print("\nERROR: Build output not found")
-            return False
-    else:
-        exe_path = project_dir / 'dist' / 'USBRelay.exe'
-        if exe_path.exists():
-            size_mb = exe_path.stat().st_size / (1024 * 1024)
-            print(f"\nBuild successful!")
-            print(f"Output: {exe_path}")
-            print(f"Size: {size_mb:.1f} MB")
-            return True
-        else:
-            print("\nERROR: Build output not found")
-            return False
+Output: `dist/USBRelay.exe`
 
+### macOS
 
-def detect_platform(args: list) -> str:
-    """Detect target platform from args or current OS."""
-    if '--windows' in args:
-        return 'windows'
-    if '--macos' in args:
-        return 'macos'
-    if IS_WINDOWS:
-        return 'windows'
-    if IS_MACOS:
-        return 'macos'
-    return 'unknown'
+```bash
+# Install build dependencies
+pip install -r requirements.txt
 
+# Build the .app bundle
+python build.py --macos
+```
 
-def main():
-    """Main build process."""
-    # Get project directory (where this script is located)
-    project_dir = Path(__file__).parent.absolute()
-    platform = detect_platform(sys.argv)
+**Required resources** in `resources/`:
+- `gnirehtet` - Relay server binary (no extension, download or build from source)
+- `adb` - Android Debug Bridge (no extension, from Android SDK Platform Tools)
+- `scan_logo.png` - SCAN brand logo
 
-    print("=" * 50)
-    print("USB Relay Manager - Build Script")
-    print("=" * 50)
-    print(f"\nProject directory: {project_dir}")
-    print(f"Target platform:  {platform}")
+**Obtaining macOS binaries:**
+- **gnirehtet**: Download from [gnirehtet releases](https://github.com/Genymobile/gnirehtet/releases) or build from Rust source (`cargo build --release`)
+- **adb**: Download [Android SDK Platform Tools for macOS](https://developer.android.com/tools/releases/platform-tools)
 
-    if platform == 'unknown':
-        print("\nERROR: Unsupported platform. Use --windows or --macos to specify.")
-        return 1
+Output: `dist/USBRelay.app` and `dist/USBRelay.app.zip`
 
-    # Cross-compilation warning
-    if platform == 'windows' and not IS_WINDOWS:
-        print("\nWARNING: Building Windows target on non-Windows platform.")
-        print("The resulting executable may not work. Build on Windows for best results.")
-        response = input("Continue anyway? (y/n): ")
-        if response.lower() != 'y':
-            print("Build cancelled.")
-            return 1
-    elif platform == 'macos' and not IS_MACOS:
-        print("\nWARNING: Building macOS target on non-macOS platform.")
-        print("The resulting app may not work. Build on macOS for best results.")
-        response = input("Continue anyway? (y/n): ")
-        if response.lower() != 'y':
-            print("Build cancelled.")
-            return 1
+## Command Line Tools (Alternative)
 
-    # Step 1: Check resources
-    print("\n[1/4] Checking resources...")
-    if not check_resources(project_dir, platform):
-        return 1
-    print("All resources found.")
+For scripted or headless environments on Windows, use the batch script:
 
-    # Step 2: Clean previous build
-    print("\n[2/4] Cleaning previous build...")
-    if not clean_build(project_dir):
-        return 1
-    print("Clean complete.")
+```batch
+scripts\install-relay-windows.bat install   # Download and install gnirehtet
+scripts\install-relay-windows.bat start     # Start relay server
+scripts\install-relay-windows.bat stop      # Stop relay server
+scripts\install-relay-windows.bat status    # Show installation and connection status
+scripts\install-relay-windows.bat autorun   # Start relay with automatic device detection
+```
 
-    # Step 3: Run PyInstaller
-    print("\n[3/4] Running PyInstaller...")
-    if not run_pyinstaller(project_dir, platform):
-        return 1
+## Troubleshooting
 
-    # Step 4: Verify output
-    print("\n[4/4] Verifying output...")
-    if not verify_output(project_dir, platform):
-        return 1
+### Device not detected after docking
 
-    print("\n" + "=" * 50)
-    print(f"Build completed successfully! ({platform})")
-    print("=" * 50)
-    return 0
+1. Check USB cable/dock is properly connected
+2. Enable USB debugging on device (Settings > Developer Options > USB Debugging)
+3. Run `adb devices` to verify connection
+4. If device shows "unauthorized", check device screen for authorization prompt
+5. Try a different USB port
 
+### macOS: "USBRelay.app is damaged" or cannot be opened
 
-if __name__ == '__main__':
-    sys.exit(main())
+macOS Gatekeeper may block unsigned applications:
+1. Right-click the app and select "Open"
+2. Click "Open" in the dialog that appears
+3. Or: System Settings > Privacy & Security > "Open Anyway"
+
+### VPN permission denied
+
+The first time USB tethering is enabled, Android will prompt for VPN permission. This must be approved for tethering to work.
+
+### Relay disconnected notification on device
+
+1. Ensure USB Relay Manager is running on computer
+2. Check ADB tunnel: `adb reverse --list`
+3. Stop and restart the relay using the GUI buttons
+
+### Connected but device has no internet
+
+1. Verify the computer itself has internet access
+2. Check if a firewall is blocking port 31416
+3. DNS issues: the relay auto-detects DNS from the host. Falls back to Google DNS (8.8.8.8) if detection fails
+
+## Technical Details
+
+- **Relay Port**: 31416 (TCP)
+- **VPN Address**: 172.16.0.2/32
+- **DNS**: Auto-detected from host system (falls back to 8.8.8.8)
+- **Default Route**: 0.0.0.0/0 (all traffic)
+- **ADB Reverse**: `localabstract:gnirehtet` -> TCP 31416
+
+## License
+
+This project is licensed under the GNU General Public License v3.0 - see the [LICENSE](LICENSE) file for details.
+
+USB Relay Manager is based on [gnirehtet](https://github.com/Genymobile/gnirehtet) developed by Genymobile, licensed under Apache 2.0.
