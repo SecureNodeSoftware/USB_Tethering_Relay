@@ -8,11 +8,16 @@ internet. Replaces the tethering functionality previously provided by
 Windows Mobile Device Center (WMDC), which is no longer supported on
 Windows 10 1703+ / Windows 11.
 
+When a device connects, a lightweight DHCP server is started on the
+RNDIS interface so that the device automatically receives its IP
+configuration — no manual static IP setup is needed on the device.
+
 Requires that an administrator has run setup_admin.ps1 (or followed the
 steps in ADMIN_SETUP_GUIDE.md) before first use.  The admin setup creates:
   - A persistent WinNAT rule for the RNDIS subnet
   - A SYSTEM-level scheduled task that assigns the gateway IP to RNDIS
     adapters when they connect
+  - A firewall rule allowing inbound DHCP (UDP port 67)
 
 At runtime this monitor performs only read-only checks — no admin
 privileges are needed.
@@ -27,12 +32,14 @@ import time
 from typing import Callable, Optional
 
 from device_monitor import DeviceMonitor
+from dhcp_server import DHCPServer
 
 IS_WINDOWS = sys.platform == 'win32'
 
 # Network configuration for the USB local link (must match setup_admin.ps1)
 SUBNET_PREFIX = "192.168.137.0/24"
 GATEWAY_IP = "192.168.137.1"
+DEVICE_IP = "192.168.137.2"
 NAT_NAME = "USBRelayNAT"
 
 
@@ -91,6 +98,7 @@ class WMDCMonitor(DeviceMonitor):
             poll_interval=poll_interval,
         )
         self._current_adapter: Optional[str] = None
+        self._dhcp_server: Optional[DHCPServer] = None
 
     # -- DeviceMonitor hooks --
 
@@ -115,6 +123,7 @@ class WMDCMonitor(DeviceMonitor):
         return True
 
     def _post_stop(self):
+        self._stop_dhcp_server()
         self._current_adapter = None
         self._log("Windows Mobile device monitoring stopped", 'info')
 
@@ -170,6 +179,10 @@ class WMDCMonitor(DeviceMonitor):
             return
 
         self._log("Using pre-configured NAT (setup by administrator)", 'success')
+
+        # Start DHCP server so the device gets its IP automatically
+        self._start_dhcp_server()
+
         self._current_adapter = adapter_name
 
         if self.on_device_connected:
@@ -180,6 +193,7 @@ class WMDCMonitor(DeviceMonitor):
         adapter_name = self._current_adapter
         self._log(f"RNDIS adapter disconnected: {adapter_name}", 'warning')
 
+        self._stop_dhcp_server()
         self._current_adapter = None
 
         if self.on_device_disconnected:
@@ -279,3 +293,35 @@ class WMDCMonitor(DeviceMonitor):
             return result.returncode == 0 and NAT_NAME in result.stdout
         except Exception:
             return False
+
+    # -- DHCP server management --
+
+    def _start_dhcp_server(self):
+        """Start the DHCP server to auto-configure the connected device."""
+        self._stop_dhcp_server()
+
+        # Detect host DNS servers to pass through to the device
+        dns_servers = self._get_dns_servers()
+
+        self._dhcp_server = DHCPServer(
+            server_ip=GATEWAY_IP,
+            client_ip=DEVICE_IP,
+            dns_servers=dns_servers,
+            on_log=self._log,
+        )
+        self._dhcp_server.start()
+
+    def _stop_dhcp_server(self):
+        """Stop the DHCP server if it is running."""
+        if self._dhcp_server:
+            self._dhcp_server.stop()
+            self._dhcp_server = None
+
+    @staticmethod
+    def _get_dns_servers():
+        """Detect system DNS servers (best-effort, falls back to 8.8.8.8)."""
+        try:
+            from adb_monitor import get_system_dns_servers
+            return get_system_dns_servers()
+        except Exception:
+            return ['8.8.8.8']
