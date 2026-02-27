@@ -15,6 +15,7 @@ from datetime import datetime
 from typing import Dict, Callable, Optional
 from pathlib import Path
 import sys
+import threading
 import webbrowser
 
 IS_WINDOWS = sys.platform == 'win32'
@@ -394,6 +395,26 @@ class USBRelayApp:
             bg=BG_COLOR
         ).pack()
 
+    # -- Thread-safe callback wrappers --
+    # Monitor threads call these from background threads.  Each wrapper
+    # schedules the real handler on the tkinter main-loop via root.after()
+    # so that widget updates never happen off the main thread.
+
+    def _ts_on_device_connected(self, device_id: str):
+        self.root.after(0, self._on_device_connected, device_id)
+
+    def _ts_on_device_disconnected(self):
+        self.root.after(0, self._on_device_disconnected)
+
+    def _ts_log(self, message: str, level: str = 'info'):
+        self.root.after(0, self.log, message, level)
+
+    def _ts_on_relay_output(self, line: str):
+        self.root.after(0, self._on_relay_output, line)
+
+    def _ts_on_status_change(self, status: str):
+        self.root.after(0, self._on_status_change, status)
+
     def _setup_managers(self):
         """Initialize relay, ADB, and (on Windows) WMDC managers."""
         from relay_manager import RelayManager
@@ -401,15 +422,15 @@ class USBRelayApp:
 
         self.relay_manager = RelayManager(
             gnirehtet_path=self.resources['gnirehtet'],
-            on_output=self._on_relay_output,
-            on_status_change=self._on_status_change
+            on_output=self._ts_on_relay_output,
+            on_status_change=self._ts_on_status_change
         )
 
         self.adb_monitor = ADBMonitor(
             adb_path=self.resources['adb'],
-            on_device_connected=self._on_device_connected,
-            on_device_disconnected=self._on_device_disconnected,
-            on_log=self.log
+            on_device_connected=self._ts_on_device_connected,
+            on_device_disconnected=self._ts_on_device_disconnected,
+            on_log=self._ts_log
         )
 
         # Windows Mobile monitor (Windows-only)
@@ -417,9 +438,9 @@ class USBRelayApp:
             try:
                 from wmdc_monitor import WMDCMonitor
                 self.wmdc_monitor = WMDCMonitor(
-                    on_device_connected=self._on_device_connected,
-                    on_device_disconnected=self._on_device_disconnected,
-                    on_log=self.log
+                    on_device_connected=self._ts_on_device_connected,
+                    on_device_disconnected=self._ts_on_device_disconnected,
+                    on_log=self._ts_log
                 )
             except ImportError:
                 self.wmdc_monitor = None
@@ -469,9 +490,9 @@ class USBRelayApp:
     def _on_mode_change(self):
         """Handle mode radio button change while running."""
         if self._active_mode and self._active_mode != self.device_mode.get():
-            # Stop current mode and start the new one
-            self._on_stop()
-            self._on_start()
+            # Stop current mode in a background thread, then start new mode
+            # on the main thread to avoid freezing the GUI during cleanup.
+            self._stop_managers_async(then=self._on_start)
 
     def _on_relay_output(self, line: str):
         """Handle output from relay process."""
@@ -567,6 +588,35 @@ class USBRelayApp:
         self.root.protocol("WM_DELETE_WINDOW", self._on_close)
 
         self.root.mainloop()
+
+    def _stop_managers_async(self, then=None):
+        """Stop active managers in a background thread to avoid GUI freeze.
+
+        Args:
+            then: Optional callback to run on the main thread after stopping.
+        """
+        active = self._active_mode
+        self._active_mode = None
+        self.start_btn.set_enabled(False)
+        self.stop_btn.set_enabled(False)
+        self.update_status('stopped')
+        self.device_label.config(text="Device: None")
+
+        def _do_stop():
+            if active == 'winmobile':
+                if self.wmdc_monitor:
+                    self.wmdc_monitor.stop()
+            else:
+                self.relay_manager.stop()
+                self.adb_monitor.stop()
+
+            # Schedule follow-up on main thread
+            if then:
+                self.root.after(0, then)
+            else:
+                self.root.after(0, lambda: self.start_btn.set_enabled(True))
+
+        threading.Thread(target=_do_stop, daemon=True).start()
 
     def _on_close(self):
         """Handle window close."""

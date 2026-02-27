@@ -12,6 +12,7 @@ NAT method fallback chain: WinNAT -> ICS -> IP Forwarding (last resort)
 Licensed under GPL v3
 """
 
+import re
 import subprocess
 import threading
 import time
@@ -44,6 +45,20 @@ def _run_powershell(command: str, timeout: int = 15) -> subprocess.CompletedProc
         timeout=timeout,
         **_subprocess_kwargs()
     )
+
+
+def _ps_quote(value: str) -> str:
+    """Escape a string for safe use inside PowerShell single quotes.
+
+    PowerShell single-quoted strings treat everything as literal except
+    embedded single quotes, which must be doubled ('').
+    """
+    return value.replace("'", "''")
+
+
+# Adapter names from Get-NetAdapter should only contain safe characters.
+# Reject anything that looks like it contains shell metacharacters.
+_SAFE_ADAPTER_NAME = re.compile(r'^[\w\s\-().#]+$')
 
 
 class WMDCMonitor:
@@ -97,6 +112,7 @@ class WMDCMonitor:
             self._cleanup_nat()
 
         self._current_adapter = None
+        self._nat_method = None
         self._log("Windows Mobile device monitoring stopped", 'info')
 
     def is_running(self) -> bool:
@@ -135,20 +151,24 @@ class WMDCMonitor:
                 "} | Select-Object -First 1 -ExpandProperty Name"
             )
             name = result.stdout.strip()
-            return name if name else None
-        except (subprocess.TimeoutExpired, Exception):
+            if not name:
+                return None
+            if not _SAFE_ADAPTER_NAME.match(name):
+                self._log(f"RNDIS adapter name contains invalid characters: {name!r}", 'error')
+                return None
+            return name
+        except Exception:
             return None
 
     # -- Connection handling --
 
     def _on_adapter_connected(self, adapter_name: str):
         """Handle RNDIS adapter appearing."""
-        self._current_adapter = adapter_name
         self._log(f"RNDIS adapter detected: {adapter_name}", 'success')
 
         # Step 1: Configure static IP on the RNDIS adapter
         if not self._configure_adapter_ip(adapter_name):
-            self._log("Failed to configure adapter IP", 'error')
+            self._log("Failed to configure adapter IP — skipping this adapter", 'error')
             return
 
         # Step 2: Set up NAT (try methods in order)
@@ -164,6 +184,10 @@ class WMDCMonitor:
         else:
             self._log("All NAT methods failed. Device will not have internet.", 'error')
             return
+
+        # Only track adapter after successful setup so that disconnect
+        # callbacks aren't fired for adapters we never fully configured.
+        self._current_adapter = adapter_name
 
         if self.on_device_connected:
             self.on_device_connected(adapter_name)
@@ -185,15 +209,16 @@ class WMDCMonitor:
     def _configure_adapter_ip(self, adapter_name: str) -> bool:
         """Assign static gateway IP to the RNDIS adapter."""
         self._log(f"Configuring {adapter_name} with IP {GATEWAY_IP}/{PREFIX_LENGTH}...", 'info')
+        safe_name = _ps_quote(adapter_name)
         try:
             # Remove any existing IP first
             _run_powershell(
-                f"Remove-NetIPAddress -InterfaceAlias '{adapter_name}' -Confirm:$false "
+                f"Remove-NetIPAddress -InterfaceAlias '{safe_name}' -Confirm:$false "
                 "-ErrorAction SilentlyContinue"
             )
             # Assign the gateway IP
             result = _run_powershell(
-                f"New-NetIPAddress -InterfaceAlias '{adapter_name}' "
+                f"New-NetIPAddress -InterfaceAlias '{safe_name}' "
                 f"-IPAddress '{GATEWAY_IP}' -PrefixLength {PREFIX_LENGTH} "
                 "-ErrorAction Stop"
             )
@@ -254,6 +279,7 @@ class WMDCMonitor:
     def _setup_ics(self, rndis_adapter: str) -> bool:
         """Enable ICS from the internet adapter to the RNDIS adapter."""
         self._log("Attempting ICS fallback...", 'info')
+        safe_name = _ps_quote(rndis_adapter)
         try:
             # PowerShell script that:
             # 1. Finds the internet-connected adapter
@@ -282,10 +308,10 @@ foreach ($conn in $connections) {{
     $status = $props.Status
 
     # Status 2 = Connected
-    if ($status -eq 2 -and $name -ne '{rndis_adapter}') {{
+    if ($status -eq 2 -and $name -ne '{safe_name}') {{
         $internetConn = $conn
     }}
-    if ($name -eq '{rndis_adapter}') {{
+    if ($name -eq '{safe_name}') {{
         $rndisConn = $conn
     }}
 }}
@@ -337,10 +363,11 @@ Write-Output 'ICS enabled'
     def _setup_ip_forwarding(self, rndis_adapter: str) -> bool:
         """Enable IP forwarding on both the internet and RNDIS adapters."""
         self._log("Attempting IP Forwarding (last resort)...", 'info')
+        safe_name = _ps_quote(rndis_adapter)
         try:
             # Enable forwarding on the RNDIS adapter
             result = _run_powershell(
-                f"Set-NetIPInterface -InterfaceAlias '{rndis_adapter}' "
+                f"Set-NetIPInterface -InterfaceAlias '{safe_name}' "
                 "-Forwarding Enabled -ErrorAction Stop"
             )
             if result.returncode != 0:
@@ -351,7 +378,7 @@ Write-Output 'ICS enabled'
             result = _run_powershell(
                 "Get-NetAdapter | Where-Object { "
                 "  $_.Status -eq 'Up' -and "
-                f"  $_.Name -ne '{rndis_adapter}'"
+                f"  $_.Name -ne '{safe_name}'"
                 "} | ForEach-Object { "
                 "  Set-NetIPInterface -InterfaceAlias $_.Name "
                 "  -Forwarding Enabled -ErrorAction SilentlyContinue "
@@ -370,8 +397,9 @@ Write-Output 'ICS enabled'
     def _disable_ip_forwarding(self, rndis_adapter: str):
         """Disable IP forwarding on the RNDIS adapter."""
         try:
+            safe_name = _ps_quote(rndis_adapter)
             _run_powershell(
-                f"Set-NetIPInterface -InterfaceAlias '{rndis_adapter}' "
+                f"Set-NetIPInterface -InterfaceAlias '{safe_name}' "
                 "-Forwarding Disabled -ErrorAction SilentlyContinue"
             )
             self._log("IP forwarding disabled", 'info')
