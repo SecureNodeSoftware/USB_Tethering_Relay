@@ -22,9 +22,43 @@ and should proceed independently** of the proxy decision.
 This review identifies the specific gaps and proposes a simpler alternative
 path (Option A) that delivers more value with less risk.
 
-**Revision note:** Rev 2 corrects the device OS from Windows CE to Windows
-Mobile 6+ and expands analysis of the IP assignment admin requirement per
-reviewer feedback.
+**Revision notes:**
+- Rev 2: Corrects device OS from Windows CE to Windows Mobile 6+, expands
+  IP assignment analysis, challenges plan value proposition.
+- Rev 3: Incorporates web research findings on actual device hardware.
+  **Critical discovery: the CK65 is Android-only (no Windows variant), and
+  the MC3300 is a Zebra product (not Honeywell).** This means the plan's
+  "Windows Mobile" device list needs to be re-validated against the actual
+  fleet. Adds WMDC DTPT pass-through context and WM6 Connection Manager
+  SOCKS5 API flag details.
+
+---
+
+## CRITICAL FINDING: Device Hardware Mismatch
+
+Web research (with sources) reveals the plan's device list is incorrect:
+
+| Device | Plan says | Actually |
+|--------|-----------|---------|
+| **CK65** | Windows Mobile (CK65, MC3300, etc.) | **Android only.** The CK65 runs Android 8-13+ on the Honeywell Mobility Edge platform. There is no Windows variant. Its *predecessor*, the **CK75**, had a WEH 6.5 option. |
+| **MC3300** | Listed as Honeywell Windows Mobile | **Zebra product, not Honeywell.** Runs Android 7.0+. No Honeywell device carries this model number. |
+| **CN80G** | Android (correct) | Confirmed Android. This is the only correctly identified device. |
+
+**Impact:** If the actual Windows Mobile devices in the fleet are NOT the
+CK65/MC3300, the plan's device-side configuration table (Section
+"Device-Side Configuration") is testing against the wrong hardware. The
+development team must identify which specific devices in the fleet actually
+run Windows Mobile 6.x / WEH 6.5 (e.g., CK75, CK3X, CN51, Dolphin series)
+and validate against those.
+
+**If there are no Windows Mobile devices in the active fleet**, the entire
+Windows Mobile tethering mode may be a legacy feature, and the
+refactoring scope changes significantly.
+
+Sources:
+- Honeywell CK65 product page: Android only, Mobility Edge platform
+- Honeywell CK75: predecessor, offered WEH 6.5 alongside Android 6
+- Zebra MC3300: Zebra product, Android 7.0+
 
 ---
 
@@ -128,9 +162,13 @@ Handheld 6.5), NOT bare Windows CE. This is an important distinction:
   automatically honor these settings.
 - **HTTP proxy is well-supported** system-wide on WM6. Settings → Connections
   → Advanced → Proxy lets you set an HTTP proxy server + port.
-- **SOCKS5 proxy is NOT supported** at the system level. WinInet on WM6 does
-  not implement SOCKS5. Individual apps could implement it, but the OS
-  Connection Manager cannot route traffic through SOCKS5.
+- **SOCKS5: API flags exist, but no standard UI.** The Connection Manager API
+  defines `CONNMGR_FLAG_PROXY_SOCKS5 = 0x8`, meaning the API supports
+  requesting SOCKS5 connections. However, there is **no standard Settings UI**
+  to configure SOCKS5 — only HTTP proxy is exposed in the device settings.
+  SOCKS5 would require OMA-DM provisioning, registry edits, or a custom
+  Connection Service Provider (CSP) plugin. Whether OEMs like Honeywell
+  shipped a SOCKS5 CSP in their device images is uncertain.
 - **Apps using raw Winsock** (direct socket calls, not WinInet) bypass the
   system proxy entirely. If the primary scanning/data-upload application uses
   raw sockets, no proxy configuration — HTTP or SOCKS5 — will work.
@@ -225,6 +263,13 @@ Center (WMDC)** handled the full setup automatically:
 
 **WMDC is not supported on Windows 10 1703+ or Windows 11.** This tool
 exists specifically to replace that functionality.
+
+Importantly, WMDC's **Desktop Pass-Through (DTPT)** service was not just
+for syncing — it was actively in the data path. The DTPT component ran
+as part of the `WcesComm` service, performing NAT between the RNDIS
+network (169.254.2.x) and the PC's real adapters. When WMDC is gone,
+the NAT is gone — which is why this tool's WinNAT approach is a direct
+functional replacement for DTPT.
 
 ### What happens without IP assignment
 
