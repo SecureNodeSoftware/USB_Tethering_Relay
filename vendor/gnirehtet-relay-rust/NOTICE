@@ -1,0 +1,13 @@
+Gnirehtet Relay (Rust)
+======================
+
+Source: https://github.com/Genymobile/gnirehtet
+Version: 2.5.1
+License: Apache License 2.0
+Copyright: Genymobile / Romain Vimont
+
+Vendored into this project to enable compile-from-source fallback
+when a pre-built gnirehtet binary is not present in resources/.
+
+Build: cargo build --release
+Output: target/release/gnirehtet (or gnirehtet.exe on Windows)
