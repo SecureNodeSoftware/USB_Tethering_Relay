@@ -10,6 +10,10 @@ Usage:
   python build.py --windows    # Force Windows build
   python build.py --macos      # Force macOS build
 
+If the gnirehtet binary is missing from resources/, the build will
+automatically compile it from the vendored Rust source in
+vendor/gnirehtet-relay-rust/ (requires the Rust toolchain: https://rustup.rs/).
+
 Based on gnirehtet by Genymobile (https://github.com/Genymobile/gnirehtet)
 Licensed under Apache 2.0
 """
@@ -24,14 +28,93 @@ IS_WINDOWS = sys.platform == 'win32'
 IS_MACOS = sys.platform == 'darwin'
 
 
+def build_gnirehtet_from_source(project_dir: Path, platform: str) -> bool:
+    """Compile gnirehtet relay from vendored Rust source as a fallback."""
+    vendor_dir = project_dir / 'vendor' / 'gnirehtet-relay-rust'
+    resources_dir = project_dir / 'resources'
+
+    if not (vendor_dir / 'Cargo.toml').exists():
+        print("  Vendored source not found at vendor/gnirehtet-relay-rust/")
+        return False
+
+    # Check for cargo (Rust toolchain)
+    cargo_bin = shutil.which('cargo')
+    if not cargo_bin:
+        print("  Rust toolchain not found. Install from https://rustup.rs/")
+        return False
+
+    print(f"  Found cargo: {cargo_bin}")
+    print("  Compiling gnirehtet from vendored source (this may take a minute)...")
+
+    # Determine build command and output path
+    cargo_cmd = [cargo_bin, 'build', '--release']
+    if platform == 'windows':
+        binary_name = 'gnirehtet.exe'
+        # Cross-compile for Windows if not on Windows
+        if not IS_WINDOWS:
+            target = 'x86_64-pc-windows-gnu'
+            cargo_cmd += ['--target', target]
+            output_binary = vendor_dir / 'target' / target / 'release' / binary_name
+        else:
+            output_binary = vendor_dir / 'target' / 'release' / binary_name
+    else:
+        binary_name = 'gnirehtet'
+        output_binary = vendor_dir / 'target' / 'release' / binary_name
+
+    try:
+        result = subprocess.run(
+            cargo_cmd,
+            cwd=str(vendor_dir),
+            capture_output=True,
+            text=True,
+            timeout=300
+        )
+        if result.returncode != 0:
+            print(f"  Cargo build failed (exit code {result.returncode}):")
+            # Show last few lines of stderr for diagnostics
+            for line in result.stderr.strip().splitlines()[-10:]:
+                print(f"    {line}")
+            return False
+    except FileNotFoundError:
+        print("  Failed to execute cargo.")
+        return False
+    except subprocess.TimeoutExpired:
+        print("  Cargo build timed out after 5 minutes.")
+        return False
+
+    if not output_binary.exists():
+        print(f"  Expected binary not found at: {output_binary}")
+        return False
+
+    # Copy compiled binary into resources/
+    resources_dir.mkdir(exist_ok=True)
+    dest = resources_dir / binary_name
+    shutil.copy2(str(output_binary), str(dest))
+    size_mb = dest.stat().st_size / (1024 * 1024)
+    print(f"  Built successfully: {dest} ({size_mb:.1f} MB)")
+    return True
+
+
 def check_resources(project_dir: Path, platform: str) -> bool:
-    """Verify all required resources are present for the target platform."""
+    """Verify all required resources are present for the target platform.
+
+    If gnirehtet is missing, attempts to compile it from the vendored Rust
+    source in vendor/gnirehtet-relay-rust/ before giving up.
+    """
     resources_dir = project_dir / 'resources'
 
     if platform == 'windows':
-        required_files = ['gnirehtet.exe', 'adb.exe']
+        gnirehtet_binary = 'gnirehtet.exe'
+        required_files = [gnirehtet_binary, 'adb.exe']
     else:
-        required_files = ['gnirehtet', 'adb']
+        gnirehtet_binary = 'gnirehtet'
+        required_files = [gnirehtet_binary, 'adb']
+
+    # Try building gnirehtet from source if it's missing
+    if not (resources_dir / gnirehtet_binary).exists():
+        print(f"  {gnirehtet_binary} not found in resources/, attempting to build from source...")
+        if not build_gnirehtet_from_source(project_dir, platform):
+            print(f"  Could not build {gnirehtet_binary} from source.")
 
     missing = []
     for filename in required_files:
@@ -44,12 +127,12 @@ def check_resources(project_dir: Path, platform: str) -> bool:
             print(f"  - {f}")
         print(f"\nPlease ensure these files are in: {resources_dir}")
 
-        if platform == 'macos':
-            print("\nTo obtain macOS binaries:")
-            print("  gnirehtet: Download from https://github.com/Genymobile/gnirehtet/releases")
-            print("             or build from source: cargo build --release")
-            print("  adb:       Download Android SDK Platform Tools for macOS from")
-            print("             https://developer.android.com/tools/releases/platform-tools")
+        if gnirehtet_binary in missing:
+            print(f"\n  To build gnirehtet from source, install Rust (https://rustup.rs/)")
+            print(f"  and re-run this build script.")
+        if platform == 'macos' and 'adb' in missing:
+            print("\n  adb: Download Android SDK Platform Tools for macOS from")
+            print("       https://developer.android.com/tools/releases/platform-tools")
         return False
 
     return True
