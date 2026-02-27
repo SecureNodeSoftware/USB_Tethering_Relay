@@ -203,6 +203,30 @@ src/
 
 ---
 
+## Testing
+
+Testing uses **Microsoft Device Emulator 3.0** to emulate Windows Mobile/CE devices with
+RNDIS connectivity on a Windows 10/11 PC. No physical device is required for initial
+validation.
+
+**Emulator testing covers:**
+- RNDIS adapter detection (emulator presents as RNDIS USB adapter to host)
+- WinNAT creation and cleanup
+- ICS fallback path (disable WinNAT first to force fallback)
+- IP Forwarding fallback path
+- Mode switching between Android and Windows Mobile in the GUI
+- Disconnect/reconnect cycles
+
+**Requirements:**
+- Windows 10/11 PC running as Administrator
+- Microsoft Device Emulator 3.0 installed
+- If Docker Desktop or WSL2 is active, test the WinNAT conflict → ICS fallback path
+
+**Final validation** should be performed on physical hardware (CK65, MC3300, etc.) once
+emulator testing passes.
+
+---
+
 ## Files Changed
 
 | File | Action | Description |
