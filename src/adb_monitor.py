@@ -11,12 +11,12 @@ Licensed under Apache 2.0
 """
 
 import subprocess
-import threading
-import time
 import re
 import sys
 from pathlib import Path
-from typing import Callable, Optional, Set, List
+from typing import Callable, List, Optional, Set
+
+from device_monitor import DeviceMonitor
 
 
 # Relay port for gnirehtet
@@ -90,7 +90,7 @@ def get_system_dns_servers() -> List[str]:
     return unique_dns if unique_dns else ['8.8.8.8']  # Fallback to Google DNS only if nothing found
 
 
-class ADBMonitor:
+class ADBMonitor(DeviceMonitor):
     """Monitors ADB for device connections and sets up USB relay tunnel."""
 
     def __init__(
@@ -101,40 +101,36 @@ class ADBMonitor:
         on_log: Optional[Callable[[str, str], None]] = None,
         poll_interval: float = 2.0
     ):
+        super().__init__(
+            on_device_connected=on_device_connected,
+            on_device_disconnected=on_device_disconnected,
+            on_log=on_log,
+            poll_interval=poll_interval,
+        )
         self.adb_path = adb_path
-        self.on_device_connected = on_device_connected
-        self.on_device_disconnected = on_device_disconnected
-        self.on_log = on_log
-        self.poll_interval = poll_interval
-
-        self._running = False
-        self._monitor_thread: Optional[threading.Thread] = None
         self._known_devices: Set[str] = set()
         self._current_device: Optional[str] = None
 
-    def start(self):
-        """Start device monitoring."""
-        if self._running:
-            return
-
-        self._running = True
-        self._monitor_thread = threading.Thread(
-            target=self._monitor_loop,
-            daemon=True
-        )
-        self._monitor_thread.start()
-        self._log("ADB device monitoring started", 'info')
-
     def stop(self, kill_server: bool = True):
         """Stop device monitoring and optionally kill ADB server."""
-        self._running = False
-        if self._monitor_thread:
-            self._monitor_thread.join(timeout=3)
-        self._log("ADB device monitoring stopped", 'info')
-
-        # Kill ADB server to clean up
+        super().stop()
         if kill_server:
             self._kill_adb_server()
+
+    # -- DeviceMonitor hooks --
+
+    def _pre_start(self) -> bool:
+        self._log("ADB device monitoring started", 'info')
+        return True
+
+    def _post_stop(self):
+        self._log("ADB device monitoring stopped", 'info')
+
+    def _poll(self):
+        devices = self._get_connected_devices()
+        self._process_device_changes(devices)
+
+    # -- ADB-specific logic --
 
     def _kill_adb_server(self):
         """Kill the ADB server daemon and any remaining adb processes."""
@@ -168,17 +164,6 @@ class ADBMonitor:
             pass
 
         self._log("ADB server stopped", 'info')
-
-    def _monitor_loop(self):
-        """Main monitoring loop."""
-        while self._running:
-            try:
-                devices = self._get_connected_devices()
-                self._process_device_changes(devices)
-            except Exception as e:
-                self._log(f"Monitor error: {e}", 'error')
-
-            time.sleep(self.poll_interval)
 
     def _get_connected_devices(self) -> Set[str]:
         """Get list of connected device IDs."""
@@ -302,8 +287,3 @@ class ADBMonitor:
 
         except Exception as e:
             self._log(f"Error starting USB relay: {e}", 'error')
-
-    def _log(self, message: str, level: str = 'info'):
-        """Send log message to callback."""
-        if self.on_log:
-            self.on_log(message, level)

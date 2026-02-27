@@ -62,7 +62,14 @@ USB reverse tethering allows a mobile device to use a computer's internet connec
 
 ### Windows Mobile Mode (Windows only)
 
-1. Run `USBRelay.exe` **as Administrator** (right-click → Run as administrator)
+**One-time admin setup** (run once by an administrator):
+```powershell
+powershell -ExecutionPolicy Bypass -File setup_admin.ps1
+```
+Or follow the step-by-step instructions in [ADMIN_SETUP_GUIDE.md](ADMIN_SETUP_GUIDE.md).
+
+**Daily use** (no admin required):
+1. Run `USBRelay.exe`
 2. Select the **"Windows Mobile"** radio button in the GUI
 3. Click **START**
 4. Connect the Windows Mobile/CE device via USB
@@ -81,7 +88,7 @@ USB reverse tethering allows a mobile device to use a computer's internet connec
 - Auto-start relay on launch (Android mode)
 - Automatic device detection and tunnel setup
 - Automatic reconnection when device is unplugged/replugged
-- WinNAT → ICS → IP Forwarding fallback chain (Windows Mobile mode)
+- Pre-configured WinNAT with zero-admin runtime (Windows Mobile mode)
 - Automatic DNS server detection from host system
 - Scrolling log panel with timestamps and log export
 - Cross-platform (Windows and macOS; Windows Mobile mode is Windows-only)
@@ -94,8 +101,9 @@ TETHERING_TOOL/
 │   ├── main.py           # Entry point - resource extraction and app launch
 │   ├── gui.py            # Tkinter GUI (Android + Windows Mobile modes)
 │   ├── relay_manager.py  # Gnirehtet relay subprocess manager
+│   ├── device_monitor.py # Base class for device monitors (shared logic)
 │   ├── adb_monitor.py    # ADB device detection and tunnel setup
-│   └── wmdc_monitor.py   # Windows Mobile RNDIS detection + WinNAT/ICS config
+│   └── wmdc_monitor.py   # Windows Mobile RNDIS detection + NAT verification
 ├── resources/            # Bundled binaries and assets
 │   ├── adb.exe           # Android Debug Bridge (Windows)
 │   ├── AdbWinApi.dll     # ADB Windows API DLL
@@ -214,24 +222,19 @@ The first time USB tethering is enabled, Android will prompt for VPN permission.
 2. Verify the device driver is installed (should appear as "Remote NDIS" in Device Manager)
 3. Try a different USB port
 
-### Windows Mobile: WinNAT failed
+### Windows Mobile: Pre-configuration check failed
 
-1. Run `Get-NetNat` in PowerShell to check for conflicting NAT networks
-2. Docker Desktop or WSL2 may conflict — stop them or let ICS fallback handle it
-3. Ensure you're running as Administrator
-
-### Windows Mobile: ICS failed
-
-1. Run as Administrator (required for ICS COM objects)
-2. Check Windows Network Connections for existing ICS sharing and disable it
-3. Verify the host PC has an active internet connection
+1. Ensure an administrator has run `setup_admin.ps1` (see [ADMIN_SETUP_GUIDE.md](ADMIN_SETUP_GUIDE.md))
+2. Run `Get-NetNat -Name USBRelayNAT` in PowerShell to verify the NAT rule exists
+3. Run `Get-ScheduledTask -TaskName USBRelay-RNDIS-IPConfig` to verify the scheduled task exists
+4. Docker Desktop or WSL2 may conflict with WinNAT — see ADMIN_SETUP_GUIDE.md for details
 
 ### Windows Mobile: Device connected but no internet
 
 1. Verify device static IP is `192.168.137.2`, gateway is `192.168.137.1`
 2. Verify PC has internet access
-3. Check the log panel for which NAT method was applied
-4. Try `ping 192.168.137.1` from the device to confirm the USB link is up
+3. Try `ping 192.168.137.1` from the device to confirm the USB link is up
+4. Check if the scheduled task assigned the IP: `Get-NetIPAddress -InterfaceAlias '*RNDIS*'`
 
 ## Technical Details
 
@@ -245,11 +248,12 @@ The first time USB tethering is enabled, Android will prompt for VPN permission.
 
 ### Windows Mobile Mode
 
-- **NAT Method**: WinNAT (primary) → ICS (fallback) → IP Forwarding (last resort)
+- **NAT Method**: WinNAT (pre-configured by setup_admin.ps1)
 - **Subnet**: `192.168.137.0/24`
 - **PC Gateway IP**: `192.168.137.1`
 - **Device Static IP**: `192.168.137.2`
-- **Requires**: Run as Administrator
+- **Admin Setup**: One-time via `setup_admin.ps1` or [ADMIN_SETUP_GUIDE.md](ADMIN_SETUP_GUIDE.md)
+- **Runtime**: No admin privileges needed
 - **Platform**: Windows only
 
 ## License
