@@ -1,16 +1,114 @@
 # PLAN.md Gap Analysis — Review Before Implementation
 
 **Reviewer:** Claude Code (automated review)
-**Date:** 2026-02-27
+**Date:** 2026-02-27 (Rev 2)
 **Scope:** Full review of PLAN.md against current source code (`src/`, `setup_admin.ps1`, `gui.py`)
 
 ---
 
 ## Executive Summary
 
-The plan is architecturally sound in its goal of replacing kernel-level NAT with a userspace proxy to eliminate runtime admin. However, **there are 5 critical gaps and 7 significant gaps** that must be resolved before coding begins. The most impactful gap is that the plan replaces **transparent** NAT (all device traffic flows automatically) with an **explicit** SOCKS5 proxy (only apps configured to use the proxy will work) — a fundamental behavioral regression that the plan does not address.
+**The plan's core premise — replacing WinNAT with a SOCKS5 proxy — does not
+deliver a meaningful improvement over the current application state.** The
+existing non-admin code path (`setup_admin.ps1` + preconfigured NAT) already
+achieves zero-admin at runtime. The proxy approach swaps one set of admin
+prerequisites (WinNAT + NAT rule) for another (firewall rules), introduces a
+behavioral regression (transparent NAT → explicit proxy), and adds ~200 lines
+of proxy code to replace ~250 lines of NAT code — a lateral move.
 
-The author correctly identified three hardware-dependent questions as blockers. This review validates those concerns and expands them with additional findings from cross-referencing the plan against the actual source code.
+However, **the DeviceMonitor base class refactoring (Steps 1-2) is valuable
+and should proceed independently** of the proxy decision.
+
+This review identifies the specific gaps and proposes a simpler alternative
+path (Option A) that delivers more value with less risk.
+
+**Revision note:** Rev 2 corrects the device OS from Windows CE to Windows
+Mobile 6+ and expands analysis of the IP assignment admin requirement per
+reviewer feedback.
+
+---
+
+## Section 0: Is This Plan Actually an Improvement?
+
+Before examining individual gaps, the fundamental question: **does replacing
+WinNAT with a SOCKS5 proxy deliver value over the current application state?**
+
+### What the current non-admin path already does
+
+The existing code — after `setup_admin.ps1` has been run once — provides a
+fully working zero-admin runtime path. Here is the complete non-admin flow
+in `wmdc_monitor.py` (lines 106-229):
+
+```
+1. _check_preconfiguration()     → verifies WinNAT, NAT rule, scheduled task (read-only)
+2. _find_rndis_adapter()         → detects RNDIS adapter via Get-NetAdapter (read-only)
+3. _wait_for_adapter_ip()        → waits for scheduled task to assign IP (read-only polling)
+4. _verify_nat_exists()          → confirms NAT rule exists (read-only)
+5. _nat_method = 'preconfigured' → DONE. Traffic flows transparently.
+```
+
+**No admin operations at runtime.** The app performs only read-only PowerShell
+queries. The NAT rule is persistent (survives reboots). The scheduled task
+runs as SYSTEM and assigns the IP independently.
+
+### What the plan proposes to change
+
+| Aspect | Current (WinNAT) | Proposed (SOCKS5 Proxy) |
+|--------|-------------------|------------------------|
+| **One-time admin setup** | WinNAT service + NAT rule + scheduled task | Scheduled task + firewall rules (see Gap 2.2) |
+| **Runtime admin needed** | None | None |
+| **Runtime code** | Read-only checks (~40 lines) | Start/stop proxy server (~200 lines) |
+| **Traffic coverage** | Transparent — ALL TCP/UDP routed | Explicit — only proxy-configured apps |
+| **Code deleted** | — | ~250 lines (NAT/ICS/IP-forwarding) |
+| **Code added** | — | ~200 lines (proxy + DNS relay) |
+| **New failure modes** | — | Firewall blocking, proxy misconfiguration, DNS port conflict |
+
+### The admin-path code being deleted is already optional
+
+The plan says "delete all the WinNAT/ICS/IP-Forwarding code (~250 lines)."
+But this code is ONLY used in the **admin path** (lines 192-209) — the
+fallback for users who run the app as admin without having run
+`setup_admin.ps1`. The non-admin path (lines 210-229) never touches NAT
+creation. If `setup_admin.ps1` is the required setup method, you can delete
+the admin-mode fallback code **without replacing it with anything**:
+
+```python
+def _on_adapter_connected(self, adapter_name: str):
+    # Simply require pre-configuration (no admin branch needed)
+    if not self._wait_for_adapter_ip(adapter_name):
+        self._log("Gateway IP not assigned. Run setup_admin.ps1.", 'error')
+        return
+    if not self._verify_nat_exists():
+        self._log("NAT rule not found. Run setup_admin.ps1.", 'error')
+        return
+    self._nat_method = 'preconfigured'
+    self._current_adapter = adapter_name
+    if self.on_device_connected:
+        self.on_device_connected(adapter_name)
+```
+
+This achieves the same ~250-line code reduction, keeps transparent NAT,
+keeps the existing admin setup, and adds **zero new complexity**.
+
+### Verdict
+
+**Option A (simplify runtime code, keep WinNAT)** is the recommended path.
+It delivers:
+- Same code reduction (~250 lines deleted, ~0 lines added)
+- Same zero-admin runtime behavior
+- No behavioral regression (transparent NAT preserved)
+- No new admin prerequisites (no firewall rules needed)
+- No new failure modes (no proxy/DNS binding issues)
+- Simpler `setup_admin.ps1` (no changes needed — script stays as-is)
+
+The proxy approach (Option B) only makes sense if a specific requirement
+emerges from hardware testing that NAT cannot fulfill (e.g., if WinNAT is
+unavailable on target machines, or if a per-app proxy gives better control
+over which traffic is allowed). Absent such a requirement, the proxy is
+added complexity for no user-facing gain.
+
+**The DeviceMonitor base class refactoring (Steps 1-2) should proceed
+regardless** — it is independently valuable for code deduplication.
 
 ---
 
@@ -18,20 +116,37 @@ The author correctly identified three hardware-dependent questions as blockers. 
 
 ### 1.1 — Do CK65/MC3300 support SOCKS5 proxy config?
 
-**Author's concern is valid and is actually MORE critical than stated.**
+**Author's concern is valid. Corrected for Windows Mobile 6+ (not bare CE).**
 
-The plan frames this as "if only HTTP proxy, switch to HTTP CONNECT proxy instead." But the real issue is deeper:
+The CK65/MC3300 run **Windows Mobile 6.x** (also branded as Windows Embedded
+Handheld 6.5), NOT bare Windows CE. This is an important distinction:
 
-- **CK65** runs Windows Embedded Handheld 6.5 (Windows CE kernel). Windows CE has **no system-wide SOCKS5 proxy setting**. Proxy support is per-application, configured via the WinInet API or registry keys. WinInet on CE supports HTTP proxies but not SOCKS5.
-- **MC3300** comes in both Android and Windows CE variants. The plan lists it under Windows Mobile, so we assume the CE variant.
-- Even if you implement HTTP CONNECT proxy instead, it must be configured **per-application** on the device. There is no single "proxy setting" that covers all traffic like on modern Android/iOS.
+- **Windows Mobile 6.x** includes the **Connection Manager** (`connmgr.h`
+  API), which provides system-wide proxy configuration. WinInet-based
+  applications (Internet Explorer Mobile, .NET Compact Framework HTTP
+  clients, any app using `WinHttpOpen` with `WINHTTP_ACCESS_TYPE_DEFAULT_PROXY`)
+  automatically honor these settings.
+- **HTTP proxy is well-supported** system-wide on WM6. Settings → Connections
+  → Advanced → Proxy lets you set an HTTP proxy server + port.
+- **SOCKS5 proxy is NOT supported** at the system level. WinInet on WM6 does
+  not implement SOCKS5. Individual apps could implement it, but the OS
+  Connection Manager cannot route traffic through SOCKS5.
+- **Apps using raw Winsock** (direct socket calls, not WinInet) bypass the
+  system proxy entirely. If the primary scanning/data-upload application uses
+  raw sockets, no proxy configuration — HTTP or SOCKS5 — will work.
 
-**Gap:** The plan says "configure device proxy: `192.168.137.1:1080`" as if it's a single setting. On Windows CE, this requires configuring each application individually (browser, custom apps, WinHTTP-based services). The plan should specify exactly which applications on the scanners need proxy configuration and whether they support it.
+**Gap:** SOCKS5 will not work on WM6 at the system level. If a proxy is
+chosen, it must be HTTP CONNECT. But the more fundamental question is whether
+a proxy is needed at all (see Section 0).
 
-**Recommendation:** Before coding, test on a physical CK65:
-1. Open Internet Explorer Mobile → Connection Settings → Proxy. Does it support SOCKS5? (Almost certainly: no. HTTP proxy: yes.)
-2. Check if the Honeywell scanning app (the actual data uploader) uses WinInet or raw sockets. If raw sockets, no proxy setting will work.
-3. If only HTTP proxy is supported → implement HTTP CONNECT proxy, not SOCKS5.
+**Recommendation for hardware testing:**
+1. On a CK65, go to Settings → Connections → My Work Network → Proxy →
+   verify HTTP proxy fields are available and SOCKS5 is not.
+2. Identify the primary data-upload application. Determine if it uses WinInet
+   (will honor system proxy) or raw Winsock (will not).
+3. With the current NAT setup working, capture traffic on the RNDIS interface
+   to see what the device actually sends (HTTP to known servers? Direct TCP
+   to custom ports? UDP?).
 
 ### 1.2 — Can they bind to DNS port 53 on the RNDIS interface?
 
@@ -43,7 +158,10 @@ The plan correctly states Windows doesn't enforce privileged port restrictions. 
 - The plan's fallback to port 5353 is useless unless the **device** can be configured to use DNS on port 5353. Windows CE's DNS resolver uses port 53 and cannot be changed without a custom DNS client.
 - The plan doesn't mention `SO_REUSEADDR` / `SO_EXCLUSIVEADDRUSE` behavior on Windows, which differs from Linux.
 
-**Gap:** If port 53 is taken by `Dnscache` and the device can't use 5353, DNS resolution breaks entirely. The plan needs a third option.
+**Gap:** If port 53 is taken by `Dnscache` and the device can't use 5353, DNS
+resolution breaks entirely. The plan needs a third option. Note that Windows
+Mobile 6.x uses a standard DNS resolver that only queries port 53 — there
+is no way to configure an alternate DNS port on the device.
 
 **Recommendation:** Test on target Windows 10/11 machines:
 ```powershell
@@ -51,7 +169,14 @@ The plan correctly states Windows doesn't enforce privileged port restrictions. 
 netstat -ano | findstr ":53 "
 # Try binding to 192.168.137.1:53 specifically
 ```
-If blocked, consider: (a) stopping `Dnscache` on the RNDIS interface only (not possible), (b) using `setup_admin.ps1` to configure a `Dnscache` exception, or (c) implementing DNS-over-SOCKS5 (the proxy resolves DNS for the device via SOCKS5 DOMAINNAME address type `0x03`).
+If blocked, consider: (a) stopping `Dnscache` on the RNDIS interface only
+(not possible), (b) using `setup_admin.ps1` to configure a `Dnscache`
+exception, or (c) implementing DNS-over-SOCKS5 (the proxy resolves DNS for
+the device via SOCKS5 DOMAINNAME address type `0x03`).
+
+**Note:** This gap is **only relevant if the proxy approach is chosen.**
+With Option A (keep WinNAT), DNS works transparently through NAT and no
+relay is needed.
 
 ### 1.3 — Any UDP traffic beyond DNS?
 
@@ -77,17 +202,117 @@ netsh trace stop
 ```
 Analyze the .etl file for UDP destinations other than port 53.
 
+**Note:** This gap is **only relevant if the proxy approach is chosen.**
+With Option A (keep WinNAT), all UDP traffic flows transparently.
+
+---
+
+## Section 1B: Why IP Assignment Requires Admin (Expanded)
+
+The plan states that admin is unavoidable for IP assignment. This section
+explains exactly why, what the scheduled task does, and why no alternative
+exists.
+
+### The problem WMDC used to solve
+
+When a Windows Mobile device connects via USB, Windows creates an RNDIS
+virtual network adapter on the host. Previously, **Windows Mobile Device
+Center (WMDC)** handled the full setup automatically:
+1. Detected the RNDIS adapter
+2. Assigned an IP address (typically `169.254.2.1`) to the host side
+3. Ran a DHCP server that gave the device an IP (`169.254.2.2`)
+4. Configured routing so device traffic reached the internet
+
+**WMDC is not supported on Windows 10 1703+ or Windows 11.** This tool
+exists specifically to replace that functionality.
+
+### What happens without IP assignment
+
+Without WMDC, when a WM6 device connects via USB:
+1. Windows creates the RNDIS adapter (automatic, no admin needed)
+2. The adapter has **no IP address** (or gets an APIPA 169.254.x.x via
+   link-local negotiation after ~30 seconds)
+3. The device is configured with static IP `192.168.137.2`, gateway
+   `192.168.137.1`
+4. The device sends all traffic to gateway `192.168.137.1`
+5. **Nobody is listening** — the host's RNDIS adapter doesn't have that IP
+6. All device traffic is silently dropped
+
+### Why `New-NetIPAddress` requires admin
+
+Assigning an IP address to a network adapter on Windows calls the kernel
+function `CreateUnicastIpAddressEntry`, which requires `SeNetworkChangeNotify`
+privilege — only available to administrators. There is no workaround:
+
+| Approach | Works? | Why not |
+|----------|--------|---------|
+| `New-NetIPAddress` (PowerShell) | Admin only | Calls privileged kernel API |
+| `netsh interface ip add address` | Admin only | Same kernel API underneath |
+| Direct registry edit (`HKLM\SYSTEM\CurrentControlSet\Services\Tcpip\Parameters\Interfaces`) | Admin only | Requires HKLM write access |
+| WMI `Win32_NetworkAdapterConfiguration.EnableStatic()` | Admin only | Calls same kernel API |
+| Python `socket.bind()` on desired IP | No | Bind ≠ assign. You can't bind to an IP the adapter doesn't have. |
+
+**There is no userspace, non-admin mechanism to assign an IP to a network
+adapter on Windows.** This is a fundamental OS limitation.
+
+### How `setup_admin.ps1` solves it
+
+The script creates a SYSTEM-level scheduled task (`USBRelay-RNDIS-IPConfig`)
+that runs every 30 seconds. The task's logic (`setup_admin.ps1` lines
+106-120):
+
+```powershell
+# Find any RNDIS adapter that is Up
+$adapter = Get-NetAdapter | Where-Object {
+    $_.InterfaceDescription -match 'RNDIS|Remote NDIS' -and
+    $_.Status -eq 'Up'
+} | Select-Object -First 1
+
+if (-not $adapter) { exit 0 }  # No adapter, nothing to do
+
+# Check if IP is already assigned
+$existing = Get-NetIPAddress -InterfaceIndex $adapter.ifIndex `
+    -IPAddress '192.168.137.1' -ErrorAction SilentlyContinue
+if ($existing) { exit 0 }  # Already configured
+
+# Remove any stale IPs and assign the gateway IP
+Remove-NetIPAddress -InterfaceIndex $adapter.ifIndex -Confirm:$false ...
+New-NetIPAddress -InterfaceIndex $adapter.ifIndex `
+    -IPAddress '192.168.137.1' -PrefixLength 24 ...
+```
+
+This runs as SYSTEM (highest privilege), is idempotent, and handles
+plug/unplug cycles automatically. The 30-second polling interval means
+the IP appears within ~30 seconds of connecting the device.
+
+### This requirement is the same for both NAT and proxy approaches
+
+Whether the plan uses WinNAT or a SOCKS5 proxy, the host MUST have
+`192.168.137.1` on the RNDIS adapter:
+
+- **NAT path:** Device gateway → `192.168.137.1` → WinNAT forwards
+- **Proxy path:** Device connects to → `192.168.137.1:1080` → Proxy relays
+
+The scheduled task is needed in both cases. The one-time admin setup
+cannot be eliminated.
+
 ---
 
 ## Section 2: Critical Gaps Not Identified by Author
 
 ### 2.1 — CRITICAL: Transparent NAT vs. Explicit Proxy — Behavioral Regression
 
-**This is the most significant gap in the plan.**
+**(See also Section 0 for the full value-proposition analysis.)**
 
-The current NAT approach is **transparent**: the device sets 192.168.137.1 as its gateway, and ALL TCP/UDP traffic is automatically routed through WinNAT. No application on the device needs any proxy configuration.
+The current NAT approach is **transparent**: the device sets 192.168.137.1
+as its gateway, and ALL TCP/UDP traffic is automatically routed through
+WinNAT. No application on the device needs any proxy configuration.
 
-The proposed SOCKS5 proxy is **explicit**: only applications that are specifically configured to connect to `192.168.137.1:1080` using the SOCKS5 protocol will have their traffic relayed. Everything else (direct TCP connections, background services, system updates, MDM check-ins) will be **silently black-holed** because:
+The proposed SOCKS5 proxy is **explicit**: only applications that are
+specifically configured to connect to `192.168.137.1:1080` using the SOCKS5
+protocol will have their traffic relayed. Everything else (direct TCP
+connections, background services, MDM check-ins) will be **silently
+black-holed** because:
 
 1. The device sends a TCP SYN to some destination (e.g., `api.example.com:443`)
 2. The packet arrives at the host via RNDIS
@@ -95,12 +320,14 @@ The proposed SOCKS5 proxy is **explicit**: only applications that are specifical
 4. The host's network stack drops the packet (it's not addressed to the host)
 5. The device connection times out silently
 
-**Impact:** Any application that doesn't explicitly use SOCKS5 stops working. This is a regression from 100% traffic support to only-proxy-aware-apps support.
+On **Windows Mobile 6.x**, the system-wide HTTP proxy (via Connection Manager)
+would cover WinInet-based applications. But any application using raw Winsock
+(custom TCP clients, background services, MDM agents) would lose connectivity.
 
-**Recommendation:** Consider one of these alternatives:
-- **Option A: Keep WinNAT** for transparent routing, but remove the runtime NAT setup code. The existing `setup_admin.ps1` already creates a persistent NAT rule. The app doesn't need to create/remove NAT at runtime — it just needs the scheduled task for IP assignment. This would achieve "zero admin at runtime" with minimal code changes.
-- **Option B: HTTP transparent proxy** — A proxy listening on the gateway IP that intercepts HTTP/HTTPS CONNECT requests without requiring device-side configuration. More complex to implement but maintains transparency for web traffic.
-- **Option C: Accept the regression** — If the scanners only need a few specific apps to work (e.g., one scanning app that supports proxy config), document this limitation explicitly.
+**Impact:** Regression from 100% traffic support to WinInet-apps-only support.
+
+**Recommendation:** Choose Option A (keep WinNAT, simplify runtime code).
+See Section 0.
 
 ### 2.2 — CRITICAL: Windows Firewall Will Block the Proxy
 
@@ -294,18 +521,17 @@ These are implementation details, but the plan should at least note the design c
 
 After the refactor, if the mode selector persists from a previous session (it doesn't — it always defaults to 'android'), this is fine. But the plan should confirm: is auto-start in WinMobile mode desirable? If so, should the default mode be auto-detected based on platform or connected devices?
 
-### 3.7 — The Plan Should Specify HTTP CONNECT as Likely Outcome
+### 3.7 — If Proxy Is Chosen, HTTP CONNECT Not SOCKS5
 
-Given that:
-- CK65/MC3300 almost certainly don't support SOCKS5 (Windows CE limitation)
-- HTTP CONNECT is simpler to implement (fewer protocol states)
-- HTTP CONNECT covers the primary use case (HTTP/HTTPS API calls from scanning apps)
+Windows Mobile 6.x supports system-wide HTTP proxy via Connection Manager
+but does NOT support SOCKS5 at the OS level. If the proxy approach is
+pursued despite the concerns in Section 0, the plan must:
 
-The plan should either:
-- Present HTTP CONNECT as the **primary** design and SOCKS5 as the alternative
-- Or at minimum, spec both implementations in enough detail that switching is quick
-
-The current plan specs only SOCKS5 in detail and mentions HTTP CONNECT as a one-line contingency.
+- Implement **HTTP CONNECT proxy**, not SOCKS5
+- The plan currently specs only SOCKS5 in detail and mentions HTTP CONNECT
+  as a one-line contingency — this should be inverted
+- HTTP CONNECT is also simpler to implement (fewer protocol states, no
+  UDP ASSOCIATE complexity)
 
 ---
 
@@ -331,62 +557,103 @@ The plan lists `relay_manager.py` under "Files Changed" for importing `subproces
 
 ## Section 5: Revised Risk Assessment
 
+### If proxy approach is pursued (Plan Steps 3-6)
+
 | Gap | Severity | Blocks Coding? | Resolution |
 |-----|----------|----------------|------------|
+| 0 — No net improvement over current state | **CRITICAL** | **YES** | Architecture decision needed |
 | 2.1 Transparent vs explicit proxy | **CRITICAL** | **YES** | Architecture decision needed |
-| 1.1 SOCKS5 vs HTTP proxy on devices | **CRITICAL** | **YES** | Hardware testing |
+| 1.1 SOCKS5 not supported on WM6 | **CRITICAL** | **YES** | Must use HTTP CONNECT instead |
 | 2.2 Windows Firewall blocks proxy | **CRITICAL** | **YES** | Add firewall rules to setup_admin.ps1 |
 | 1.2 DNS port 53 availability | **CRITICAL** | **YES** | Hardware + host testing |
 | 1.3 UDP beyond DNS | **CRITICAL** | **YES** | Traffic audit on physical devices |
-| 2.3 Migration path | Significant | No (but before release) | Add legacy cleanup to setup_admin.ps1 |
+| 2.3 Migration path | Significant | Before release | Add legacy cleanup to setup_admin.ps1 |
 | 2.4 setup_admin.ps1 sizing | Significant | No | Update plan estimates |
 | 2.5 Preconfiguration checks | Significant | No | Update plan step 4 |
-| 3.1 Multi-device tracking | Significant | No | Design decision |
 | 3.2 GUI methods incomplete | Significant | No | Expand plan step 6 |
 | 3.3 No proxy status feedback | Significant | No | Add to plan |
+| 3.7 Must be HTTP CONNECT not SOCKS5 | Significant | No | Rewrite rndis_proxy.py spec |
+
+### If Option A is chosen (simplify runtime code, keep WinNAT)
+
+| Gap | Severity | Blocks Coding? | Resolution |
+|-----|----------|----------------|------------|
+| 3.1 Multi-device tracking | Significant | No | Design decision for base class |
+| 3.2 GUI methods | Minor | No | Smaller scope than proxy approach |
 | 3.4 stop() edge case | Minor | No | Add defensive cleanup |
-| 3.5 DNS relay underspecified | Minor | No | Add design notes |
-| 3.6 Auto-start behavior | Minor | No | Confirm intent |
-| 3.7 HTTP CONNECT as primary | Significant | No | Reframe plan |
+
+Option A has **zero critical blockers** and can begin immediately.
 
 ---
 
-## Section 6: Recommended Pre-Coding Checklist
+## Section 6: Recommended Path Forward
 
-Before any implementation work begins:
+### Recommended: Option A — Simplify Runtime Code, Keep WinNAT
 
-### Must Complete (Hardware Testing)
+This delivers the plan's stated goals with minimal risk:
 
-- [ ] **Test CK65 proxy support**: Connect via RNDIS with current NAT setup. Configure HTTP proxy in Internet Explorer Mobile and the scanning application. Document which apps support proxy and which don't.
-- [ ] **Test MC3300 proxy support**: Same test on MC3300 variant.
-- [ ] **Test DNS port 53 binding**: On target Windows 10/11 machines, attempt `socket.bind(('192.168.137.1', 53))` from a non-admin Python process. Record result with and without Hyper-V/WSL installed.
-- [ ] **Capture scanner traffic**: Run a packet capture on the RNDIS interface while scanners are actively used. Document all unique destination IP:port pairs and protocols (TCP/UDP).
-- [ ] **Test Windows Firewall impact**: With NAT removed, test if a Python socket server on 192.168.137.1:1080 is reachable from the device without adding a firewall rule.
+**Step 1: DeviceMonitor base class** — Proceed as planned. Independently
+valuable.
 
-### Must Decide (Architecture)
+**Step 2: ADBMonitor refactor** — Proceed as planned. Decide on
+multi-device tracking policy (Gap 3.1).
 
-- [ ] **Transparent vs explicit proxy**: Choose between Option A (keep NAT, simplify runtime code only), Option B (transparent HTTP proxy), or Option C (explicit proxy with documented limitations).
-- [ ] **SOCKS5 vs HTTP CONNECT**: Based on device testing, choose the proxy protocol.
-- [ ] **Multi-device policy**: Decide whether to preserve ADBMonitor's multi-device tracking or simplify to single-device.
+**Step 3 (revised): Simplify WMDCMonitor** — Instead of adding a proxy,
+**delete the admin-mode fallback code** and always require `setup_admin.ps1`:
+- Delete: `_is_admin()`, `_configure_adapter_ip()`, `_setup_winnat()`,
+  `_remove_winnat()`, `_ensure_winnat_service()`, `_setup_ics()`,
+  `_disable_ics()`, `_setup_ip_forwarding()`, `_disable_ip_forwarding()`,
+  `_cleanup_nat()`, and the admin/non-admin branching
+- Keep: `_check_preconfiguration()`, `_wait_for_adapter_ip()`,
+  `_verify_nat_exists()`, `_find_rndis_adapter()`
+- Result: ~250 lines deleted, ~0 lines added. WMDCMonitor shrinks from
+  617 lines to ~150 lines.
 
-### Must Update (Plan Revisions)
+**Step 4: No changes to `setup_admin.ps1`** — Script stays as-is. No
+firewall rules needed. No migration logic needed.
 
-- [ ] Add Windows Firewall rules to `setup_admin.ps1` plan
-- [ ] Add migration/legacy cleanup steps
-- [ ] Update `setup_admin.ps1` line count estimate
-- [ ] Expand GUI update scope (Step 6)
-- [ ] Add `_check_preconfiguration()` replacement
-- [ ] Spec DNS relay design choices
-- [ ] Add proxy status feedback mechanism
+**Step 5 (revised): Simplify GUI** — Smaller scope since proxy status
+feedback is not needed.
+
+### If hardware testing reveals NAT is insufficient
+
+If physical device testing shows that WinNAT doesn't work on target
+machines (e.g., WinNAT not available on certain Windows editions, or a
+specific requirement for per-app traffic control), THEN revisit the proxy
+approach with these corrections:
+- Use HTTP CONNECT proxy, not SOCKS5 (WM6 doesn't support SOCKS5)
+- Add firewall rules to `setup_admin.ps1`
+- Accept the transparent → explicit traffic regression and document it
+- Add DNS relay only if port 53 binding is confirmed to work
+
+### Hardware testing checklist (still recommended regardless of path)
+
+- [ ] **Capture scanner traffic**: With current NAT working, run a packet
+  capture on the RNDIS interface during normal scanner use. Document all
+  protocols and destination ports. This validates that NAT is covering
+  all needed traffic.
+- [ ] **Test WinNAT availability**: Confirm WinNAT is available and working
+  on all target Windows machines (10/11, Pro/Enterprise editions).
+- [ ] **Test disconnect/reconnect cycles**: Verify the scheduled task
+  reliably reassigns the IP within 30 seconds on all target machines.
+- [ ] **Test CK65 proxy support** (for future reference): Document the
+  Connection Manager proxy settings available on WM6 devices.
 
 ---
 
-## Section 7: The Author Was Right
+## Section 7: Summary
 
-The author's closing statement deserves emphasis:
+The plan author correctly identified three hardware questions as blockers.
+This review validates those concerns and adds a higher-level finding:
+**the plan solves a problem that the current code has already solved.**
 
-> *"These are hardware questions that need physical device testing before the implementation starts."*
+The existing non-admin path (added in commit a798aa4) already achieves
+zero-admin runtime with transparent NAT. The proxy approach trades one set
+of admin setup requirements for another, adds comparable code complexity,
+and regresses traffic coverage from transparent to explicit.
 
-**This is correct.** Gap 2.1 (transparent vs explicit proxy) is the most consequential finding in this review, and it can only be resolved by understanding exactly how the CK65/MC3300 scanners route their traffic. If those devices' primary applications use raw sockets (not WinInet), then **no proxy approach will work** and the NAT path must be preserved.
-
-The recommended path forward: complete the hardware testing checklist above, then reconvene on the plan. The refactoring work (Steps 1-2: DeviceMonitor base class, ADBMonitor inheritance) is safe to begin now as it doesn't depend on the proxy decision. Steps 3-6 should wait for hardware test results.
+The recommended path:
+1. **Proceed with Steps 1-2** (DeviceMonitor base class) — independently valuable
+2. **Simplify WMDCMonitor** by deleting the admin-mode fallback, not by adding a proxy
+3. **Keep `setup_admin.ps1` and WinNAT as-is** — they work and are already deployed
+4. **Run hardware testing** to validate NAT coverage on target devices
