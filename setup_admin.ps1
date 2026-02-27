@@ -189,7 +189,7 @@ New-NetFirewallRule `
     -Protocol UDP `
     -LocalPort 67 `
     -Action Allow `
-    -Profile Private | Out-Null
+    -Profile Private,Public | Out-Null
 
 Write-Host "  Firewall rule '$FwRuleName' created (inbound UDP 67)." -ForegroundColor Green
 

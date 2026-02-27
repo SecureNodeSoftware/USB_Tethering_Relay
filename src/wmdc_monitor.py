@@ -41,6 +41,7 @@ SUBNET_PREFIX = "192.168.137.0/24"
 GATEWAY_IP = "192.168.137.1"
 DEVICE_IP = "192.168.137.2"
 NAT_NAME = "USBRelayNAT"
+FW_RULE_NAME = "USBRelay-DHCP-Server"
 
 
 def _subprocess_kwargs():
@@ -250,6 +251,23 @@ class WMDCMonitor(DeviceMonitor):
                 issues.append("Scheduled task 'USBRelay-RNDIS-IPConfig' is disabled")
         except Exception:
             issues.append("Scheduled task 'USBRelay-RNDIS-IPConfig' not found")
+
+        # Check firewall rule for DHCP server
+        try:
+            result = _run_powershell(
+                f"Get-NetFirewallRule -DisplayName '{FW_RULE_NAME}' "
+                "-ErrorAction Stop | Select-Object -ExpandProperty Enabled"
+            )
+            enabled = result.stdout.strip()
+            if result.returncode != 0 or not enabled:
+                issues.append(f"Firewall rule '{FW_RULE_NAME}' not found "
+                              "(DHCP auto-configuration will not work)")
+            elif enabled != 'True':
+                issues.append(f"Firewall rule '{FW_RULE_NAME}' is disabled "
+                              "(DHCP auto-configuration will not work)")
+        except Exception:
+            issues.append(f"Firewall rule '{FW_RULE_NAME}' not found "
+                          "(DHCP auto-configuration will not work)")
 
         return issues
 

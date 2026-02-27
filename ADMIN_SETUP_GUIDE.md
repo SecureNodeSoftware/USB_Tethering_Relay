@@ -269,8 +269,10 @@ Expected: `192.168.137.1` with PrefixLength 24.
   `Get-NetAdapter`.
 - **Task shows "Disabled"** — Right-click → Enable in Task Scheduler, or:
   `Enable-ScheduledTask -TaskName 'USBRelay-RNDIS-IPConfig'`
-- **IP assigned but device can't ping gateway** — Check that the device's
-  static IP is on the same subnet (`192.168.137.x`, mask `255.255.255.0`).
+- **IP assigned but device can't ping gateway** — The device should
+  receive its IP automatically via DHCP (see Step 5). If using a manual
+  static IP as a fallback, check it is on the same subnet
+  (`192.168.137.x`, mask `255.255.255.0`).
 
 ---
 
@@ -292,7 +294,7 @@ New-NetFirewallRule `
     -Protocol UDP `
     -LocalPort 67 `
     -Action Allow `
-    -Profile Private
+    -Profile Private,Public
 ```
 
 ### Verify

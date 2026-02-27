@@ -61,7 +61,6 @@ OPT_PAD = 0
 OPT_SUBNET_MASK = 1
 OPT_ROUTER = 3
 OPT_DNS = 6
-OPT_HOSTNAME = 12
 OPT_REQUESTED_IP = 50
 OPT_LEASE_TIME = 51
 OPT_MSG_TYPE = 53
@@ -220,6 +219,20 @@ class DHCPServer:
                 return
 
             self._log(f"DHCP {type_name} from {client_mac}", 'info')
+
+            # If the client requested a specific IP that isn't ours, NAK so
+            # it restarts discovery and picks up the correct address.
+            requested_ip = _parse_option(options_data, OPT_REQUESTED_IP)
+            if requested_ip and requested_ip != socket.inet_aton(self.client_ip):
+                requested_ip_str = socket.inet_ntoa(requested_ip)
+                self._log(
+                    f"DHCP NAK: client requested {requested_ip_str}, "
+                    f"expected {self.client_ip}",
+                    'warning',
+                )
+                self._send_nak(xid, chaddr)
+                return
+
             self._send_ack(xid, chaddr)
 
         elif msg_type in (DHCPRELEASE, DHCPDECLINE):
@@ -246,6 +259,24 @@ class DHCPServer:
             f"(lease {self.lease_time}s, DNS {', '.join(self.dns_servers)})",
             'success',
         )
+
+    def _send_nak(self, xid: bytes, chaddr: bytes):
+        """Respond with a DHCPNAK to force the client to restart discovery."""
+        header = bytearray(DHCP_HEADER_SIZE)
+        header[0] = BOOTREPLY
+        header[1] = 1   # htype: Ethernet
+        header[2] = 6   # hlen
+        header[4:8] = xid
+        header[28:44] = chaddr
+
+        options = bytearray()
+        options += DHCP_MAGIC_COOKIE
+        options += bytes([OPT_MSG_TYPE, 1, DHCPNAK])
+        options += bytes([OPT_SERVER_ID, 4])
+        options += socket.inet_aton(self.server_ip)
+        options += bytes([OPT_END])
+
+        self._send_broadcast(bytes(header) + bytes(options))
 
     # -- Packet construction --
 
