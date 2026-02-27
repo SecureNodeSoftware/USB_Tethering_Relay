@@ -73,6 +73,13 @@ def extract_resources() -> dict:
             if not IS_WINDOWS and name not in ('logo', 'icon'):
                 os.chmod(dest, 0o755)  # Make executable on Unix
 
+    # Extract ADB companion DLLs on Windows (adb.exe requires these)
+    if IS_WINDOWS:
+        for dll_name in ('AdbWinApi.dll', 'AdbWinUsbApi.dll'):
+            source = get_resource_path(dll_name)
+            if source.exists():
+                shutil.copy2(source, app_dir / dll_name)
+
     return resources
 
 

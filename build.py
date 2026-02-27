@@ -105,10 +105,23 @@ def check_resources(project_dir: Path, platform: str) -> bool:
 
     if platform == 'windows':
         gnirehtet_binary = 'gnirehtet.exe'
-        required_files = [gnirehtet_binary, 'adb.exe']
+        required_files = [
+            gnirehtet_binary,
+            'adb.exe',
+            'AdbWinApi.dll',
+            'AdbWinUsbApi.dll',
+            'gnirehtet.apk',
+            'scan_logo.png',
+            'scan_icon.ico',
+        ]
     else:
         gnirehtet_binary = 'gnirehtet'
-        required_files = [gnirehtet_binary, 'adb']
+        required_files = [
+            gnirehtet_binary,
+            'adb',
+            'gnirehtet.apk',
+            'scan_logo.png',
+        ]
 
     # Try building gnirehtet from source if it's missing
     if not (resources_dir / gnirehtet_binary).exists():

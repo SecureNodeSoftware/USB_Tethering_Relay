@@ -2,7 +2,7 @@
 """
 USB Relay Manager - GUI Module
 
-Provides the tkinter-based graphical interface with SCAN branding,
+Provides the tkinter-based graphical interface with
 Start/Stop buttons, status indicator, and scrolling log panel.
 
 Based on gnirehtet by Genymobile (https://github.com/Genymobile/gnirehtet)
@@ -20,9 +20,9 @@ import webbrowser
 
 IS_WINDOWS = sys.platform == 'win32'
 
-# SCAN Brand Colors
-SCAN_BRAND_BLUE = '#4169E1'  # Royal Blue
-SCAN_BRAND_BLUE_DARK = '#2850b8'
+# Brand Colors
+BRAND_BLUE = '#4169E1'  # Royal Blue
+BRAND_BLUE_DARK = '#2850b8'
 
 # Theme colors (light theme)
 BG_COLOR = '#ffffff'
@@ -184,14 +184,14 @@ class USBRelayApp:
         )
         credit_label.pack(pady=(2, 5), side=tk.BOTTOM)
         credit_label.bind('<Button-1>', lambda e: webbrowser.open('https://github.com/Genymobile/gnirehtet'))
-        credit_label.bind('<Enter>', lambda e: credit_label.config(fg=SCAN_BRAND_BLUE))
+        credit_label.bind('<Enter>', lambda e: credit_label.config(fg=BRAND_BLUE))
         credit_label.bind('<Leave>', lambda e: credit_label.config(fg='#999999'))
 
         # Main container - fill horizontally only, pack at top
         main_frame = tk.Frame(self.root, bg=BG_COLOR)
         main_frame.pack(fill=tk.X, padx=20, pady=0)
 
-        # SCAN Logo Section
+        # Logo Section
         logo_frame = tk.Frame(main_frame, bg=BG_COLOR)
         logo_frame.pack(pady=(10, 10))
 
@@ -325,14 +325,14 @@ class USBRelayApp:
             log_header,
             text="Export Logs",
             font=('Arial', 9, 'underline'),
-            fg=SCAN_BRAND_BLUE,
+            fg=BRAND_BLUE,
             bg=BG_COLOR,
             cursor='hand2'
         )
         export_label.pack(side=tk.RIGHT)
         export_label.bind('<Button-1>', lambda e: self._export_logs())
-        export_label.bind('<Enter>', lambda e: export_label.config(fg=SCAN_BRAND_BLUE_DARK))
-        export_label.bind('<Leave>', lambda e: export_label.config(fg=SCAN_BRAND_BLUE))
+        export_label.bind('<Enter>', lambda e: export_label.config(fg=BRAND_BLUE_DARK))
+        export_label.bind('<Leave>', lambda e: export_label.config(fg=BRAND_BLUE))
 
         self.log_text = scrolledtext.ScrolledText(
             log_frame,
@@ -381,17 +381,9 @@ class USBRelayApp:
         """Show text fallback if logo image can't be loaded."""
         tk.Label(
             parent,
-            text="SCAN",
-            font=('Arial', 28, 'bold'),
-            fg=SCAN_BRAND_BLUE,
-            bg=BG_COLOR
-        ).pack()
-
-        tk.Label(
-            parent,
-            text="Secure Code Acquisition Node",
-            font=('Arial', 9),
-            fg=TEXT_SECONDARY,
+            text="USB Relay Manager",
+            font=('Arial', 20, 'bold'),
+            fg=BRAND_BLUE,
             bg=BG_COLOR
         ).pack()
 
