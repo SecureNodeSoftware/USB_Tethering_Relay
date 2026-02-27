@@ -7,7 +7,11 @@ NAT on the host PC so the device can reach the internet. Replaces the
 tethering functionality previously provided by Windows Mobile Device
 Center (WMDC), which is no longer supported on Windows 11.
 
-NAT method fallback chain: WinNAT -> ICS -> IP Forwarding (last resort)
+Two operating modes:
+  - Admin:     Configures NAT directly (WinNAT -> ICS -> IP Forwarding).
+  - Non-admin: Uses pre-configured NAT set up by setup_admin.ps1.
+               A SYSTEM-level scheduled task handles IP assignment;
+               the app only performs read-only verification.
 
 Licensed under GPL v3
 """
@@ -77,12 +81,18 @@ class WMDCMonitor:
         self.poll_interval = poll_interval
 
         self._running = False
+        self._admin = False
         self._monitor_thread: Optional[threading.Thread] = None
         self._current_adapter: Optional[str] = None
-        self._nat_method: Optional[str] = None  # 'winnat', 'ics', or 'forwarding'
+        self._nat_method: Optional[str] = None  # 'winnat', 'ics', 'forwarding', or 'preconfigured'
 
     def start(self):
-        """Start RNDIS device monitoring."""
+        """Start RNDIS device monitoring.
+
+        Works for both admin and non-admin users.  Non-admin users require
+        that an administrator has run setup_admin.ps1 first to pre-configure
+        the WinNAT rule and the RNDIS IP-assignment scheduled task.
+        """
         if self._running:
             return
 
@@ -90,8 +100,21 @@ class WMDCMonitor:
             self._log("Windows Mobile mode is only available on Windows", 'error')
             return
 
-        if not self._is_admin():
-            self._log("WARNING: Not running as Administrator. NAT configuration may fail.", 'warning')
+        self._admin = self._is_admin()
+        if self._admin:
+            self._log("Running with Administrator privileges", 'info')
+        else:
+            self._log("Running as standard user — checking pre-configuration...", 'info')
+            issues = self._check_preconfiguration()
+            if issues:
+                for issue in issues:
+                    self._log(issue, 'error')
+                self._log(
+                    "An administrator must run setup_admin.ps1 first. "
+                    "See setup_admin.ps1 for details.",
+                    'error'
+                )
+                return
 
         self._running = True
         self._monitor_thread = threading.Thread(
@@ -166,24 +189,44 @@ class WMDCMonitor:
         """Handle RNDIS adapter appearing."""
         self._log(f"RNDIS adapter detected: {adapter_name}", 'success')
 
-        # Step 1: Configure static IP on the RNDIS adapter
-        if not self._configure_adapter_ip(adapter_name):
-            self._log("Failed to configure adapter IP — skipping this adapter", 'error')
-            return
+        if self._admin:
+            # Admin path: configure everything directly
+            if not self._configure_adapter_ip(adapter_name):
+                self._log("Failed to configure adapter IP — skipping this adapter", 'error')
+                return
 
-        # Step 2: Set up NAT (try methods in order)
-        if self._setup_winnat():
-            self._nat_method = 'winnat'
-            self._log("NAT configured via WinNAT", 'success')
-        elif self._setup_ics(adapter_name):
-            self._nat_method = 'ics'
-            self._log("NAT configured via ICS (fallback)", 'success')
-        elif self._setup_ip_forwarding(adapter_name):
-            self._nat_method = 'forwarding'
-            self._log("IP Forwarding enabled (last resort fallback)", 'warning')
+            if self._setup_winnat():
+                self._nat_method = 'winnat'
+                self._log("NAT configured via WinNAT", 'success')
+            elif self._setup_ics(adapter_name):
+                self._nat_method = 'ics'
+                self._log("NAT configured via ICS (fallback)", 'success')
+            elif self._setup_ip_forwarding(adapter_name):
+                self._nat_method = 'forwarding'
+                self._log("IP Forwarding enabled (last resort fallback)", 'warning')
+            else:
+                self._log("All NAT methods failed. Device will not have internet.", 'error')
+                return
         else:
-            self._log("All NAT methods failed. Device will not have internet.", 'error')
-            return
+            # Non-admin path: wait for the scheduled task to assign the IP,
+            # then verify the pre-configured NAT is in place.
+            if not self._wait_for_adapter_ip(adapter_name):
+                self._log(
+                    f"Gateway IP {GATEWAY_IP} was not assigned to {adapter_name}. "
+                    "The scheduled task may not be running — ask your administrator.",
+                    'error'
+                )
+                return
+
+            if not self._verify_nat_exists():
+                self._log(
+                    "NAT rule not found. An administrator must run setup_admin.ps1.",
+                    'error'
+                )
+                return
+
+            self._nat_method = 'preconfigured'
+            self._log("Using pre-configured NAT (setup by administrator)", 'success')
 
         # Only track adapter after successful setup so that disconnect
         # callbacks aren't fired for adapters we never fully configured.
@@ -203,6 +246,101 @@ class WMDCMonitor:
 
         if self.on_device_disconnected:
             self.on_device_disconnected()
+
+    # -- Pre-configuration checks (non-admin) --
+
+    def _check_preconfiguration(self) -> list:
+        """Verify that an administrator has run setup_admin.ps1.
+
+        Returns a list of human-readable issues (empty = all good).
+        All checks here are read-only and safe for standard users.
+        """
+        issues = []
+
+        # Check WinNAT service is running
+        try:
+            result = _run_powershell(
+                "(Get-Service -Name 'winnat' -ErrorAction Stop).Status"
+            )
+            status = result.stdout.strip()
+            if status != 'Running':
+                issues.append(f"WinNAT service is '{status}' (must be Running)")
+        except Exception:
+            issues.append("WinNAT service not found on this system")
+
+        # Check NAT rule exists
+        try:
+            result = _run_powershell(
+                f"Get-NetNat -Name '{NAT_NAME}' -ErrorAction Stop "
+                "| Select-Object -ExpandProperty InternalIPInterfaceAddressPrefix"
+            )
+            prefix = result.stdout.strip()
+            if result.returncode != 0 or not prefix:
+                issues.append(f"NAT rule '{NAT_NAME}' not found")
+            elif prefix != SUBNET_PREFIX:
+                issues.append(
+                    f"NAT rule '{NAT_NAME}' has wrong subnet: {prefix} "
+                    f"(expected {SUBNET_PREFIX})"
+                )
+        except Exception:
+            issues.append(f"NAT rule '{NAT_NAME}' not found")
+
+        # Check scheduled task exists
+        try:
+            result = _run_powershell(
+                f"Get-ScheduledTask -TaskName 'USBRelay-RNDIS-IPConfig' "
+                "-ErrorAction Stop | Select-Object -ExpandProperty State"
+            )
+            state = result.stdout.strip()
+            if result.returncode != 0 or not state:
+                issues.append("Scheduled task 'USBRelay-RNDIS-IPConfig' not found")
+            elif state == 'Disabled':
+                issues.append("Scheduled task 'USBRelay-RNDIS-IPConfig' is disabled")
+        except Exception:
+            issues.append("Scheduled task 'USBRelay-RNDIS-IPConfig' not found")
+
+        return issues
+
+    def _wait_for_adapter_ip(self, adapter_name: str, timeout: float = 15.0) -> bool:
+        """Wait for the scheduled task to assign the gateway IP to the adapter.
+
+        The SYSTEM-level scheduled task polls every 30s, so we may need to
+        wait briefly after the adapter appears.
+        """
+        safe_name = _ps_quote(adapter_name)
+        deadline = time.monotonic() + timeout
+        interval = 2.0
+
+        while time.monotonic() < deadline:
+            try:
+                result = _run_powershell(
+                    f"Get-NetIPAddress -InterfaceAlias '{safe_name}' "
+                    f"-IPAddress '{GATEWAY_IP}' -ErrorAction Stop"
+                )
+                if result.returncode == 0 and GATEWAY_IP in result.stdout:
+                    self._log(f"Gateway IP {GATEWAY_IP} confirmed on {adapter_name}", 'info')
+                    return True
+            except Exception:
+                pass
+
+            self._log(
+                f"Waiting for IP assignment on {adapter_name}... "
+                f"({int(deadline - time.monotonic())}s remaining)",
+                'info'
+            )
+            time.sleep(interval)
+
+        return False
+
+    def _verify_nat_exists(self) -> bool:
+        """Check if the pre-configured NAT rule exists (read-only)."""
+        try:
+            result = _run_powershell(
+                f"Get-NetNat -Name '{NAT_NAME}' -ErrorAction Stop"
+            )
+            return result.returncode == 0 and NAT_NAME in result.stdout
+        except Exception:
+            return False
 
     # -- IP configuration --
 
@@ -235,9 +373,44 @@ class WMDCMonitor:
 
     # -- NAT Method 1: WinNAT --
 
+    def _ensure_winnat_service(self) -> bool:
+        """Make sure the WinNAT service is running, starting it if needed."""
+        try:
+            result = _run_powershell(
+                "(Get-Service -Name 'winnat' -ErrorAction Stop).Status"
+            )
+            status = result.stdout.strip()
+            if status == 'Running':
+                return True
+
+            self._log(f"WinNAT service is '{status}' — starting it...", 'info')
+            start_result = _run_powershell(
+                "Start-Service -Name 'winnat' -ErrorAction Stop"
+            )
+            if start_result.returncode != 0:
+                self._log(
+                    f"Failed to start WinNAT service: {start_result.stderr.strip()}",
+                    'warning'
+                )
+                return False
+
+            self._log("WinNAT service started", 'info')
+            return True
+        except subprocess.TimeoutExpired:
+            self._log("WinNAT service check timed out", 'warning')
+            return False
+        except Exception as e:
+            self._log(f"WinNAT service check failed: {e}", 'warning')
+            return False
+
     def _setup_winnat(self) -> bool:
         """Create a WinNAT network for the RNDIS subnet."""
         self._log("Attempting WinNAT setup...", 'info')
+
+        if not self._ensure_winnat_service():
+            self._log("WinNAT service unavailable — skipping to next method", 'warning')
+            return False
+
         try:
             # Remove any stale NAT with the same name
             _run_powershell(
@@ -414,7 +587,10 @@ Write-Output 'ICS enabled'
         adapter = self._current_adapter
         self._log(f"Cleaning up NAT ({method})...", 'info')
 
-        if method == 'winnat':
+        if method == 'preconfigured':
+            # Don't remove admin-provisioned configuration
+            self._log("Pre-configured NAT left in place (managed by administrator)", 'info')
+        elif method == 'winnat':
             self._remove_winnat()
         elif method == 'ics':
             self._disable_ics()
