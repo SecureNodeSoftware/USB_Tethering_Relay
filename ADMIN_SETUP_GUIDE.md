@@ -44,8 +44,9 @@ Get-Service -Name 'winnat'
 ```
 
 If this returns an error ("Cannot find any service with service name
-'winnat'"), your Windows edition does not support WinNAT. The automated
-fallback (ICS) in the USB Relay Manager requires running the app as admin.
+'winnat'"), your Windows edition does not support WinNAT and Windows
+Mobile tethering will not work. WinNAT is included in Pro and Enterprise
+editions but may not be available on Home edition.
 
 ---
 
@@ -272,7 +273,11 @@ Expected: `192.168.137.1` with PrefixLength 24.
 
 ## Step 4: Configure the Windows Mobile Device
 
-On the device, configure a static IP for the USB connection:
+On the device, configure a static IP for the USB connection.  The
+settings are the same across all versions — only the navigation path
+differs.
+
+### Static IP settings (all versions)
 
 | Setting | Value |
 |---------|-------|
@@ -286,15 +291,48 @@ forward DNS queries (WinNAT handles this). Using `8.8.8.8` directly
 requires the device's DNS packets to reach Google's servers through NAT,
 which WinNAT also handles.
 
-### Location on Windows Mobile 6.x
+### Windows Embedded Handheld 6.5 (e.g. Intermec CN70)
 
-Settings → Connections → Connections → Advanced → Select Networks →
-Edit... → Proxy Settings (for proxy, if needed) / Network Cards tab
-(for IP configuration)
+1. **Disable ActiveSync networking** (critical):
+   Start → Settings → Connections → **USB to PC** →
+   **uncheck** "Enable advanced network functionality"
 
-Or for USB specifically: Settings → Connections → USB to PC →
-uncheck "Enable advanced network functionality" if using static IP
-mode.
+   > If this box is checked, Windows Mobile tries to use ActiveSync/WMDC
+   > networking over USB, which conflicts with static IP configuration.
+
+2. **Assign the static IP**:
+   Start → Settings → Connections → Connections → **Advanced** tab →
+   **Select Networks** → edit the network that contains "Work" →
+   **Proxy Settings** / **Network Cards** tab →
+   select the RNDIS adapter → **Use specific IP address** →
+   enter the values from the table above
+
+   Alternatively: Settings → Connections → **Network Cards** →
+   tap the RNDIS or USB adapter → enter the static IP settings.
+
+### Windows Mobile 5.0 (e.g. Intermec CN3)
+
+1. Start → Settings → Connections → **Network Cards** tab
+2. Tap the RNDIS or USB network adapter in the list
+3. Select **Use specific IP address**
+4. Enter the values from the table above
+5. Tap OK and soft-reset if prompted
+
+> WM 5.0 does not have a "USB to PC" toggle.  RNDIS is always active
+> when the device is connected via USB.
+
+### Windows Mobile 2003 / Pocket PC (e.g. Intermec 700C)
+
+1. Start → Settings → **Connections** tab → **Connections**
+2. Tap **Advanced** → **Network Adapters** (or **Network Cards**)
+3. Select the USB or RNDIS adapter from the list
+4. Select **Use specific IP address**
+5. Enter the values from the table above
+6. Tap OK and soft-reset if prompted
+
+> On WM 2003 the adapter may appear as "USB" rather than "RNDIS" in the
+> list.  It is the same physical adapter — select whichever entry appears
+> when the device is connected via USB.
 
 ---
 
