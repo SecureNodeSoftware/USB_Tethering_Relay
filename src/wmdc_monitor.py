@@ -41,6 +41,7 @@ SUBNET_PREFIX = "192.168.137.0/24"
 GATEWAY_IP = "192.168.137.1"
 DEVICE_IP = "192.168.137.2"
 NAT_NAME = "USBRelayNAT"
+TASK_NAME = "USBRelay-RNDIS-IPConfig"
 FW_RULE_NAME = "USBRelay-DHCP-Server"
 
 
@@ -238,19 +239,23 @@ class WMDCMonitor(DeviceMonitor):
         except Exception:
             issues.append(f"NAT rule '{NAT_NAME}' not found")
 
-        # Check scheduled task exists
+        # Check scheduled task exists.
+        # Uses schtasks.exe instead of Get-ScheduledTask because the native
+        # tool works reliably for standard users querying SYSTEM-level tasks.
         try:
-            result = _run_powershell(
-                f"Get-ScheduledTask -TaskName 'USBRelay-RNDIS-IPConfig' "
-                "-ErrorAction Stop | Select-Object -ExpandProperty State"
+            result = subprocess.run(
+                ['schtasks', '/Query', '/TN', f'\\{TASK_NAME}'],
+                capture_output=True,
+                text=True,
+                timeout=15,
+                **_subprocess_kwargs()
             )
-            state = result.stdout.strip()
-            if result.returncode != 0 or not state:
-                issues.append("Scheduled task 'USBRelay-RNDIS-IPConfig' not found")
-            elif state == 'Disabled':
-                issues.append("Scheduled task 'USBRelay-RNDIS-IPConfig' is disabled")
+            if result.returncode != 0:
+                issues.append(f"Scheduled task '{TASK_NAME}' not found")
+            elif 'Disabled' in result.stdout:
+                issues.append(f"Scheduled task '{TASK_NAME}' is disabled")
         except Exception:
-            issues.append("Scheduled task 'USBRelay-RNDIS-IPConfig' not found")
+            issues.append(f"Scheduled task '{TASK_NAME}' not found")
 
         # Check firewall rule for DHCP server
         try:

@@ -147,11 +147,12 @@ $action  = New-ScheduledTaskAction `
     -Argument "-NoProfile -NonInteractive -WindowStyle Hidden -EncodedCommand $encodedScript"
 
 # Trigger: run every 1 minute, indefinitely
+# RepetitionDuration must be strictly greater than RepetitionInterval,
+# otherwise New-ScheduledTaskTrigger throws a validation error on
+# Windows 10 1803+ / Windows 11.  Using ~100 years as effectively infinite.
 $trigger = New-ScheduledTaskTrigger -Once -At (Get-Date) `
     -RepetitionInterval (New-TimeSpan -Minutes 1) `
-    -RepetitionDuration (New-TimeSpan -Minutes 1)
-# Empty Duration = repeat indefinitely (avoids Task Scheduler XML range limits)
-$trigger.Repetition.Duration = ''
+    -RepetitionDuration (New-TimeSpan -Days 36500)
 
 $principal = New-ScheduledTaskPrincipal `
     -UserId 'SYSTEM' `
