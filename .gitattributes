@@ -1,0 +1,5 @@
+# PowerShell scripts require CRLF line endings for here-string parsing
+# in Windows PowerShell 5.1
+*.ps1 text eol=crlf
+*.psm1 text eol=crlf
+*.psd1 text eol=crlf
