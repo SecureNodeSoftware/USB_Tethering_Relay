@@ -146,10 +146,12 @@ $action  = New-ScheduledTaskAction `
     -Execute 'powershell.exe' `
     -Argument "-NoProfile -NonInteractive -WindowStyle Hidden -EncodedCommand $encodedScript"
 
-# Trigger: run indefinitely every 1 minute
+# Trigger: run every 1 minute, indefinitely
 $trigger = New-ScheduledTaskTrigger -Once -At (Get-Date) `
     -RepetitionInterval (New-TimeSpan -Minutes 1) `
-    -RepetitionDuration (New-TimeSpan -Days 9999)
+    -RepetitionDuration (New-TimeSpan -Minutes 1)
+# Empty Duration = repeat indefinitely (avoids Task Scheduler XML range limits)
+$trigger.Repetition.Duration = ''
 
 $principal = New-ScheduledTaskPrincipal `
     -UserId 'SYSTEM' `
@@ -162,15 +164,20 @@ $settings = New-ScheduledTaskSettingsSet `
     -StartWhenAvailable `
     -ExecutionTimeLimit (New-TimeSpan -Minutes 1)
 
-Register-ScheduledTask `
-    -TaskName $TaskName `
-    -Action $action `
-    -Trigger $trigger `
-    -Principal $principal `
-    -Settings $settings `
-    -Description 'Assigns gateway IP to RNDIS adapters for USB Relay Manager' | Out-Null
-
-Write-Host "  Scheduled task '$TaskName' created (runs as SYSTEM)." -ForegroundColor Green
+try {
+    Register-ScheduledTask `
+        -TaskName $TaskName `
+        -Action $action `
+        -Trigger $trigger `
+        -Principal $principal `
+        -Settings $settings `
+        -Description 'Assigns gateway IP to RNDIS adapters for USB Relay Manager' `
+        -ErrorAction Stop | Out-Null
+    Write-Host "  Scheduled task '$TaskName' created (runs as SYSTEM)." -ForegroundColor Green
+} catch {
+    Write-Host "  ERROR: Failed to create scheduled task: $_" -ForegroundColor Red
+    exit 1
+}
 
 # Step 4: Firewall rule for DHCP server
 #   The USB Relay Manager runs a lightweight DHCP server (UDP port 67)
