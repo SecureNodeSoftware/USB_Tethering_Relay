@@ -146,10 +146,10 @@ $action  = New-ScheduledTaskAction `
     -Execute 'powershell.exe' `
     -Argument "-NoProfile -NonInteractive -WindowStyle Hidden -EncodedCommand $encodedScript"
 
-# Trigger: run every 1 minute (minimum allowed by Task Scheduler)
+# Trigger: run indefinitely every 1 minute
 $trigger = New-ScheduledTaskTrigger -Once -At (Get-Date) `
     -RepetitionInterval (New-TimeSpan -Minutes 1) `
-    -RepetitionDuration ([TimeSpan]::MaxValue)
+    -RepetitionDuration (New-TimeSpan -Days 9999)
 
 $principal = New-ScheduledTaskPrincipal `
     -UserId 'SYSTEM' `
