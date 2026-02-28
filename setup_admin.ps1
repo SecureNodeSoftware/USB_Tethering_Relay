@@ -116,21 +116,21 @@ Write-Host "  Created NAT rule: $NatName ($SubnetPrefix)" -ForegroundColor Green
 #   It checks for an RNDIS adapter without the correct IP and assigns it.
 Write-Host "[3/4] Creating scheduled task for RNDIS IP auto-configuration..." -ForegroundColor White
 
-$taskScript = @"
-`$adapter = Get-NetAdapter | Where-Object {
-    `$_.InterfaceDescription -match 'RNDIS|Remote NDIS' -and
-    `$_.Status -eq 'Up'
-} | Select-Object -First 1
-
-if (-not `$adapter) { exit 0 }
-
-`$existing = Get-NetIPAddress -InterfaceIndex `$adapter.ifIndex -IPAddress '$GatewayIP' -ErrorAction SilentlyContinue
-if (`$existing) { exit 0 }
-
-# Remove any existing IPs on this adapter and assign the gateway IP
-Remove-NetIPAddress -InterfaceIndex `$adapter.ifIndex -Confirm:`$false -ErrorAction SilentlyContinue
-New-NetIPAddress -InterfaceIndex `$adapter.ifIndex -IPAddress '$GatewayIP' -PrefixLength $PrefixLength -ErrorAction SilentlyContinue | Out-Null
-"@
+$taskScript = @(
+    '$adapter = Get-NetAdapter | Where-Object {'
+    '    $_.InterfaceDescription -match ''RNDIS|Remote NDIS'' -and'
+    '    $_.Status -eq ''Up'''
+    '} | Select-Object -First 1'
+    ''
+    'if (-not $adapter) { exit 0 }'
+    ''
+    "`$existing = Get-NetIPAddress -InterfaceIndex `$adapter.ifIndex -IPAddress '$GatewayIP' -ErrorAction SilentlyContinue"
+    'if ($existing) { exit 0 }'
+    ''
+    '# Remove any existing IPs on this adapter and assign the gateway IP'
+    'Remove-NetIPAddress -InterfaceIndex $adapter.ifIndex -Confirm:$false -ErrorAction SilentlyContinue'
+    "New-NetIPAddress -InterfaceIndex `$adapter.ifIndex -IPAddress '$GatewayIP' -PrefixLength $PrefixLength -ErrorAction SilentlyContinue | Out-Null"
+) -join "`r`n"
 
 $encodedScript = [Convert]::ToBase64String(
     [Text.Encoding]::Unicode.GetBytes($taskScript)
