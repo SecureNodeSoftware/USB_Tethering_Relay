@@ -146,9 +146,9 @@ $action  = New-ScheduledTaskAction `
     -Execute 'powershell.exe' `
     -Argument "-NoProfile -NonInteractive -WindowStyle Hidden -EncodedCommand $encodedScript"
 
-# Trigger: run every 30 seconds (catches plug-in events reliably)
+# Trigger: run every 1 minute (minimum allowed by Task Scheduler)
 $trigger = New-ScheduledTaskTrigger -Once -At (Get-Date) `
-    -RepetitionInterval (New-TimeSpan -Seconds 30) `
+    -RepetitionInterval (New-TimeSpan -Minutes 1) `
     -RepetitionDuration ([TimeSpan]::MaxValue)
 
 $principal = New-ScheduledTaskPrincipal `
