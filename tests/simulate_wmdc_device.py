@@ -38,7 +38,6 @@ import os
 import socket
 import struct
 import sys
-import threading
 import time
 from typing import List, Optional
 
@@ -453,16 +452,18 @@ def run_loopback_test(
 
             hostname = 'www.example.com'
             path = '/'
+            use_https = True
             if test_url:
                 from urllib.parse import urlparse
                 parsed = urlparse(test_url)
                 hostname = parsed.hostname or hostname
                 path = parsed.path or '/'
+                use_https = (parsed.scheme == 'https')
 
             validator = ConnectivityValidator(
                 test_hostname=hostname,
                 test_path=path,
-                use_https=True,
+                use_https=use_https,
             )
             result = validator.validate()
             for line in validator.get_log():
@@ -488,6 +489,7 @@ def run_loopback_test(
 
 def run_integration_test(
     test_url: Optional[str] = None,
+    skip_connectivity: bool = False,
 ) -> bool:
     """Run a full test against an already-running USB Relay instance.
 
@@ -561,7 +563,7 @@ def run_integration_test(
         ("Server assigned IP in expected subnet",
          lease.client_ip.startswith('192.168.137.'),
          f"got {lease.client_ip}"),
-        ("Gateway is {EXPECTED_SERVER_IP}",
+        (f"Gateway is {EXPECTED_SERVER_IP}",
          lease.gateway == EXPECTED_SERVER_IP,
          f"got {lease.gateway}"),
         ("DNS servers provided",
@@ -577,36 +579,37 @@ def run_integration_test(
             all_ok = False
 
     # Connectivity test through the tether
-    print_section("End-to-End Connectivity (through tether)")
+    if not skip_connectivity:
+        print_section("End-to-End Connectivity (through tether)")
 
-    hostname = 'www.example.com'
-    path = '/'
-    use_https = True
-    if test_url:
-        from urllib.parse import urlparse
-        parsed = urlparse(test_url)
-        hostname = parsed.hostname or hostname
-        path = parsed.path or '/'
-        use_https = (parsed.scheme == 'https')
+        hostname = 'www.example.com'
+        path = '/'
+        use_https = True
+        if test_url:
+            from urllib.parse import urlparse
+            parsed = urlparse(test_url)
+            hostname = parsed.hostname or hostname
+            path = parsed.path or '/'
+            use_https = (parsed.scheme == 'https')
 
-    dns_server = lease.dns_servers[0] if lease.dns_servers else None
+        dns_server = lease.dns_servers[0] if lease.dns_servers else None
 
-    validator = ConnectivityValidator(
-        test_hostname=hostname,
-        test_path=path,
-        dns_server=dns_server,
-        use_https=use_https,
-    )
-    result = validator.validate()
+        validator = ConnectivityValidator(
+            test_hostname=hostname,
+            test_path=path,
+            dns_server=dns_server,
+            use_https=use_https,
+        )
+        result = validator.validate()
 
-    for line in validator.get_log():
-        print_info(line)
+        for line in validator.get_log():
+            print_info(line)
 
-    if result.all_passed:
-        print_pass("End-to-end connectivity validated through tether!")
-    else:
-        print_fail("Connectivity validation failed through tether")
-        all_ok = False
+        if result.all_passed:
+            print_pass("End-to-end connectivity validated through tether!")
+        else:
+            print_fail("Connectivity validation failed through tether")
+            all_ok = False
 
     return all_ok
 
@@ -667,7 +670,10 @@ Examples:
         )
 
     elif args.mode == 'integration':
-        success = run_integration_test(test_url=args.url)
+        success = run_integration_test(
+            test_url=args.url,
+            skip_connectivity=args.skip_connectivity,
+        )
 
     # Final result
     print()

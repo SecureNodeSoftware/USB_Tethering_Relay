@@ -12,11 +12,12 @@ Licensed under GPL v3
 """
 
 import http.client
+import os
 import socket
 import ssl
 import time
 from dataclasses import dataclass, field
-from typing import List, Optional, Tuple
+from typing import List, Optional
 
 
 @dataclass
@@ -186,6 +187,7 @@ class ConnectivityValidator:
         """Test HTTP(S) request to the target host."""
         self._log(f"Test 3: HTTP{'S' if self.use_https else ''} Request")
 
+        conn = None
         try:
             start = time.monotonic()
 
@@ -209,7 +211,6 @@ class ConnectivityValidator:
             response = conn.getresponse()
             body = response.read()
             elapsed = (time.monotonic() - start) * 1000
-            conn.close()
 
             result.http_ok = 200 <= response.status < 400
             result.http_status = response.status
@@ -229,10 +230,13 @@ class ConnectivityValidator:
             result.errors.append(f"HTTP request failed: {e}")
             self._log(f"  FAIL: {e}")
 
+        finally:
+            if conn:
+                conn.close()
+
     # -- DNS helper --
 
-    @staticmethod
-    def _resolve_via_dns_server(hostname: str, dns_server: str) -> str:
+    def _resolve_via_dns_server(self, hostname: str, dns_server: str) -> str:
         """Resolve a hostname using a specific DNS server via raw UDP.
 
         Builds a minimal DNS A-record query and parses the response.
@@ -240,7 +244,7 @@ class ConnectivityValidator:
         import struct as st
 
         # Build DNS query
-        query_id = int.from_bytes(bytes(2), 'big') | 0x1234
+        query_id = int.from_bytes(os.urandom(2), 'big')
         # Header: ID, flags=0x0100 (standard query, recursion desired),
         # QDCOUNT=1, ANCOUNT=0, NSCOUNT=0, ARCOUNT=0
         header = st.pack('!HHHHHH', query_id, 0x0100, 1, 0, 0, 0)
@@ -255,7 +259,7 @@ class ConnectivityValidator:
 
         # Send query
         sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-        sock.settimeout(5.0)
+        sock.settimeout(self.timeout)
         try:
             sock.sendto(header + question, (dns_server, 53))
             data, _ = sock.recvfrom(512)

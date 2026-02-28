@@ -23,7 +23,6 @@ import os
 import random
 import socket
 import struct
-import time
 from dataclasses import dataclass, field
 from typing import List, Optional
 
@@ -320,40 +319,53 @@ class DHCPClient:
             return None
 
     def _receive_response(self, expected_type: int) -> Optional[DHCPLease]:
-        """Receive and validate a DHCP response of the expected type."""
-        data = self._receive()
-        if data is None:
-            return None
+        """Receive and validate a DHCP response of the expected type.
 
-        if len(data) < DHCP_MIN_PACKET:
-            self._log(f"  Response too short ({len(data)} bytes)")
-            return None
+        Loops until the timeout expires, skipping non-matching packets
+        (e.g. wrong xid from other DHCP servers on the network).
+        """
+        import time as _time
+        deadline = _time.monotonic() + self.timeout
 
-        # Check xid matches
-        if data[4:8] != self.xid:
-            self._log("  Response xid mismatch — ignoring")
-            return None
+        while True:
+            remaining = deadline - _time.monotonic()
+            if remaining <= 0:
+                return None
+            self._sock.settimeout(remaining)
 
-        # Check message type
-        options_data = data[DHCP_MIN_PACKET:]
-        msg_type_raw = _parse_option(options_data, OPT_MSG_TYPE)
-        if not msg_type_raw:
-            self._log("  Response has no message type option")
-            return None
+            data = self._receive()
+            if data is None:
+                return None  # socket timeout
 
-        msg_type = msg_type_raw[0]
-        type_name = _MSG_TYPE_NAMES.get(msg_type, str(msg_type))
+            if len(data) < DHCP_MIN_PACKET:
+                self._log(f"  Response too short ({len(data)} bytes)")
+                continue
 
-        if msg_type == DHCPNAK:
-            self._log(f"  Received DHCPNAK from server")
-            return None
+            # Check xid matches
+            if data[4:8] != self.xid:
+                self._log("  Response xid mismatch — ignoring")
+                continue
 
-        if msg_type != expected_type:
-            expected_name = _MSG_TYPE_NAMES.get(expected_type, str(expected_type))
-            self._log(f"  Expected {expected_name} but got {type_name}")
-            return None
+            # Check message type
+            options_data = data[DHCP_MIN_PACKET:]
+            msg_type_raw = _parse_option(options_data, OPT_MSG_TYPE)
+            if not msg_type_raw:
+                self._log("  Response has no message type option")
+                continue
 
-        return _parse_lease_from_response(data)
+            msg_type = msg_type_raw[0]
+            type_name = _MSG_TYPE_NAMES.get(msg_type, str(msg_type))
+
+            if msg_type == DHCPNAK:
+                self._log(f"  Received DHCPNAK from server")
+                return None
+
+            if msg_type != expected_type:
+                expected_name = _MSG_TYPE_NAMES.get(expected_type, str(expected_type))
+                self._log(f"  Expected {expected_name} but got {type_name}")
+                continue
+
+            return _parse_lease_from_response(data)
 
     # -- High-level DHCP handshake --
 
