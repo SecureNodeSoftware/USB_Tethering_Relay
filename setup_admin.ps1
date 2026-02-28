@@ -146,13 +146,16 @@ $action  = New-ScheduledTaskAction `
     -Execute 'powershell.exe' `
     -Argument "-NoProfile -NonInteractive -WindowStyle Hidden -EncodedCommand $encodedScript"
 
-# Trigger: run every 1 minute, indefinitely
-# RepetitionDuration must be strictly greater than RepetitionInterval,
-# otherwise New-ScheduledTaskTrigger throws a validation error on
-# Windows 10 1803+ / Windows 11.  Using ~100 years as effectively infinite.
+# Trigger: run every 1 minute, indefinitely.
+# We must supply a RepetitionDuration > RepetitionInterval for the cmdlet to
+# accept the parameters, but large day-counts (e.g. P36500D) are rejected by
+# the Task Scheduler XML schema on many Windows builds.  Work-around: create
+# the trigger with a small valid duration, then clear Repetition.Duration to
+# mean "indefinite".
 $trigger = New-ScheduledTaskTrigger -Once -At (Get-Date) `
     -RepetitionInterval (New-TimeSpan -Minutes 1) `
-    -RepetitionDuration (New-TimeSpan -Days 36500)
+    -RepetitionDuration (New-TimeSpan -Days 1)
+$trigger.Repetition.Duration = ''
 
 $principal = New-ScheduledTaskPrincipal `
     -UserId 'SYSTEM' `
