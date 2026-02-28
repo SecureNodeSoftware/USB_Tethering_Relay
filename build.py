@@ -20,7 +20,6 @@ Licensed under Apache 2.0
 
 import io
 import os
-import re
 import sys
 import shutil
 import subprocess
@@ -153,32 +152,31 @@ def download_platform_tools(resources_dir: Path) -> bool:
 
 
 def validate_adb_version_match(resources_dir: Path) -> bool:
-    """Check that adb.exe and its companion DLLs are version-matched.
+    """Check that adb.exe and its companion DLLs are from the same release.
 
-    Reads the PE version info from each file to detect mismatches that
-    cause 'procedure entry point could not be located' errors at runtime.
+    Compares file modification times — files extracted from the same
+    platform-tools zip will have timestamps within seconds of each other.
+    A large gap suggests they were sourced separately and may be mismatched.
     """
-    adb_path = resources_dir / 'adb.exe'
-    dll_path = resources_dir / 'AdbWinApi.dll'
+    paths = [resources_dir / f for f in ADB_FILES]
 
-    if not adb_path.exists() or not dll_path.exists():
-        return True  # Can't validate if files don't exist yet
+    # Can't validate if any file is missing
+    if not all(p.exists() for p in paths):
+        return True
 
     try:
-        adb_data = adb_path.read_bytes()
-        dll_data = dll_path.read_bytes()
+        mtimes = [p.stat().st_mtime for p in paths]
     except OSError:
-        return True  # Skip validation on read errors
+        return True
 
-    # Old DLLs have Win7-era PDB paths; modern ones reference current paths.
-    has_old_pdb = b'objfre_win7' in dll_data or b'objfre_wxp' in dll_data
-
-    if has_old_pdb and adb_path.stat().st_size > 5_000_000:
-        # Modern adb.exe (>5MB) with ancient DLLs = guaranteed mismatch
-        print("  WARNING: ADB version mismatch detected!")
-        print("  adb.exe is from a modern platform-tools release")
-        print("  but AdbWinApi.dll is from a legacy Win7-era build.")
-        print("  This will cause 'procedure entry point' errors at runtime.")
+    # If modification times differ by more than 24 hours, they likely
+    # came from different downloads/releases
+    max_gap = max(mtimes) - min(mtimes)
+    if max_gap > 86400:  # 24 hours in seconds
+        print("  WARNING: ADB files appear to be from different releases!")
+        print(f"  Modification time gap: {max_gap / 3600:.0f} hours")
+        print("  adb.exe, AdbWinApi.dll, and AdbWinUsbApi.dll must all")
+        print("  come from the same platform-tools download.")
         return False
 
     return True
