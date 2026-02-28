@@ -4,12 +4,13 @@
 a = Analysis(
     ['src/main.py'],
     pathex=[],
-    binaries=[],
-    datas=[
+    binaries=[
         ('resources/gnirehtet.exe', '.'),
         ('resources/adb.exe', '.'),
         ('resources/AdbWinApi.dll', '.'),
         ('resources/AdbWinUsbApi.dll', '.'),
+    ],
+    datas=[
         ('resources/scan_logo.png', '.'),
         ('resources/scan_icon.ico', '.'),
         ('resources/gnirehtet.apk', '.'),
@@ -35,7 +36,7 @@ exe = EXE(
     bootloader_ignore_signals=False,
     strip=False,
     upx=True,
-    upx_exclude=[],
+    upx_exclude=['adb.exe', 'gnirehtet.exe', 'AdbWinApi.dll', 'AdbWinUsbApi.dll'],
     runtime_tmpdir=None,
     console=False,
     disable_windowed_traceback=False,

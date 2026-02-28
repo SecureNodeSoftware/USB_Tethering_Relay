@@ -140,6 +140,7 @@ class ADBMonitor(DeviceMonitor):
                 [str(self.adb_path), 'kill-server'],
                 capture_output=True,
                 timeout=5,
+                cwd=str(self.adb_path.parent),
                 **_subprocess_kwargs()
             )
         except Exception:
@@ -173,6 +174,7 @@ class ADBMonitor(DeviceMonitor):
                 capture_output=True,
                 text=True,
                 timeout=10,
+                cwd=str(self.adb_path.parent),
                 **_subprocess_kwargs()
             )
 
@@ -244,6 +246,7 @@ class ADBMonitor(DeviceMonitor):
                 capture_output=True,
                 text=True,
                 timeout=10,
+                cwd=str(self.adb_path.parent),
                 **_subprocess_kwargs()
             )
 
@@ -277,6 +280,7 @@ class ADBMonitor(DeviceMonitor):
                 capture_output=True,
                 text=True,
                 timeout=10,
+                cwd=str(self.adb_path.parent),
                 **_subprocess_kwargs()
             )
 
