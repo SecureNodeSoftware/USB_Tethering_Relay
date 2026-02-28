@@ -18,11 +18,16 @@ Based on gnirehtet by Genymobile (https://github.com/Genymobile/gnirehtet)
 Licensed under Apache 2.0
 """
 
+import io
 import os
+import re
 import sys
 import shutil
 import subprocess
+import zipfile
 from pathlib import Path
+from urllib.request import urlopen
+from urllib.error import URLError
 
 IS_WINDOWS = sys.platform == 'win32'
 IS_MACOS = sys.platform == 'darwin'
@@ -95,6 +100,90 @@ def build_gnirehtet_from_source(project_dir: Path, platform: str) -> bool:
     return True
 
 
+PLATFORM_TOOLS_URL = 'https://dl.google.com/android/repository/platform-tools-latest-windows.zip'
+
+# Files that must come from the same platform-tools release
+ADB_FILES = ['adb.exe', 'AdbWinApi.dll', 'AdbWinUsbApi.dll']
+
+
+def download_platform_tools(resources_dir: Path) -> bool:
+    """Download official Android SDK Platform Tools and extract ADB files.
+
+    All three files (adb.exe, AdbWinApi.dll, AdbWinUsbApi.dll) are pulled
+    from the same zip so they are guaranteed version-matched.
+    """
+    print(f"  Downloading Android SDK Platform Tools...")
+    print(f"  URL: {PLATFORM_TOOLS_URL}")
+
+    try:
+        resp = urlopen(PLATFORM_TOOLS_URL, timeout=60)
+        data = resp.read()
+    except (URLError, OSError) as e:
+        print(f"  Download failed: {e}")
+        return False
+
+    try:
+        with zipfile.ZipFile(io.BytesIO(data)) as zf:
+            extracted = 0
+            for adb_file in ADB_FILES:
+                zip_path = f'platform-tools/{adb_file}'
+                try:
+                    info = zf.getinfo(zip_path)
+                except KeyError:
+                    print(f"  {adb_file} not found in zip archive")
+                    continue
+
+                dest = resources_dir / adb_file
+                with zf.open(info) as src, open(dest, 'wb') as dst:
+                    dst.write(src.read())
+                size_kb = dest.stat().st_size / 1024
+                print(f"  Extracted {adb_file} ({size_kb:.0f} KB)")
+                extracted += 1
+
+            if extracted == len(ADB_FILES):
+                print("  All ADB files downloaded successfully (version-matched)")
+                return True
+            else:
+                print(f"  Only extracted {extracted}/{len(ADB_FILES)} files")
+                return False
+
+    except zipfile.BadZipFile:
+        print("  Downloaded file is not a valid zip archive")
+        return False
+
+
+def validate_adb_version_match(resources_dir: Path) -> bool:
+    """Check that adb.exe and its companion DLLs are version-matched.
+
+    Reads the PE version info from each file to detect mismatches that
+    cause 'procedure entry point could not be located' errors at runtime.
+    """
+    adb_path = resources_dir / 'adb.exe'
+    dll_path = resources_dir / 'AdbWinApi.dll'
+
+    if not adb_path.exists() or not dll_path.exists():
+        return True  # Can't validate if files don't exist yet
+
+    try:
+        adb_data = adb_path.read_bytes()
+        dll_data = dll_path.read_bytes()
+    except OSError:
+        return True  # Skip validation on read errors
+
+    # Old DLLs have Win7-era PDB paths; modern ones reference current paths.
+    has_old_pdb = b'objfre_win7' in dll_data or b'objfre_wxp' in dll_data
+
+    if has_old_pdb and adb_path.stat().st_size > 5_000_000:
+        # Modern adb.exe (>5MB) with ancient DLLs = guaranteed mismatch
+        print("  WARNING: ADB version mismatch detected!")
+        print("  adb.exe is from a modern platform-tools release")
+        print("  but AdbWinApi.dll is from a legacy Win7-era build.")
+        print("  This will cause 'procedure entry point' errors at runtime.")
+        return False
+
+    return True
+
+
 def check_resources(project_dir: Path, platform: str) -> bool:
     """Verify all required resources are present for the target platform.
 
@@ -129,6 +218,23 @@ def check_resources(project_dir: Path, platform: str) -> bool:
         if not build_gnirehtet_from_source(project_dir, platform):
             print(f"  Could not build {gnirehtet_binary} from source.")
 
+    # On Windows, auto-download ADB files if missing or version-mismatched
+    if platform == 'windows':
+        adb_missing = any(
+            not (resources_dir / f).exists() for f in ADB_FILES
+        )
+        adb_mismatched = not validate_adb_version_match(resources_dir)
+
+        if adb_missing or adb_mismatched:
+            reason = "missing" if adb_missing else "version-mismatched"
+            print(f"  ADB files are {reason}, downloading from official release...")
+            if not download_platform_tools(resources_dir):
+                print("  Failed to download platform-tools.")
+                print("  Manually download from: https://developer.android.com/tools/releases/platform-tools")
+                if adb_mismatched:
+                    print("  IMPORTANT: adb.exe, AdbWinApi.dll, and AdbWinUsbApi.dll")
+                    print("  must ALL come from the same platform-tools release.")
+
     missing = []
     for filename in required_files:
         if not (resources_dir / filename).exists():
@@ -146,6 +252,13 @@ def check_resources(project_dir: Path, platform: str) -> bool:
         if platform == 'macos' and 'adb' in missing:
             print("\n  adb: Download Android SDK Platform Tools for macOS from")
             print("       https://developer.android.com/tools/releases/platform-tools")
+        return False
+
+    # Final version validation (after any downloads)
+    if platform == 'windows' and not validate_adb_version_match(resources_dir):
+        print("ERROR: ADB version mismatch persists after download attempt.")
+        print("Manually replace adb.exe, AdbWinApi.dll, and AdbWinUsbApi.dll")
+        print("with files from the same platform-tools release.")
         return False
 
     return True

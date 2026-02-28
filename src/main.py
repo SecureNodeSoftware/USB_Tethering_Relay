@@ -80,6 +80,13 @@ def extract_resources() -> dict:
             if source.exists():
                 shutil.copy2(source, app_dir / dll_name)
 
+    # Extract gnirehtet APK
+    apk_source = get_resource_path('gnirehtet.apk')
+    if apk_source.exists():
+        apk_dest = app_dir / 'gnirehtet.apk'
+        shutil.copy2(apk_source, apk_dest)
+        resources['apk'] = apk_dest
+
     return resources
 
 
