@@ -63,12 +63,14 @@ class RelayManager:
 
         try:
             # Start gnirehtet relay command
+            # Set cwd to binary's directory so companion DLLs are found
             self.process = subprocess.Popen(
                 [str(self.gnirehtet_path), 'relay'],
                 stdout=subprocess.PIPE,
                 stderr=subprocess.STDOUT,
                 text=True,
                 bufsize=1,  # Line buffered
+                cwd=str(self.gnirehtet_path.parent),
                 **_subprocess_kwargs()
             )
 
