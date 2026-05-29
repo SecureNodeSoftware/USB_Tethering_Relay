@@ -13,6 +13,7 @@ Licensed under Apache 2.0
 import subprocess
 import re
 import sys
+import threading
 from pathlib import Path
 from typing import Callable, List, Optional, Set
 
@@ -112,12 +113,42 @@ class ADBMonitor(DeviceMonitor):
         self.apk_path = apk_path
         self._known_devices: Set[str] = set()
         self._current_device: Optional[str] = None
+        # When False, devices are still detected and reported (so features
+        # like file transfer work) but no relay tunnel/VPN is configured.
+        self._relay_enabled = False
 
     def stop(self, kill_server: bool = True):
         """Stop device monitoring and optionally kill ADB server."""
         super().stop()
+        # Relay setup is meaningless once monitoring stops; clear the flag so
+        # a later detection-only restart doesn't configure the relay on its
+        # own. Callers that want the relay re-enable it explicitly.
+        self._relay_enabled = False
         if kill_server:
             self._kill_adb_server()
+
+    def set_relay_enabled(self, enabled: bool):
+        """Enable or disable relay-specific device setup.
+
+        Detection runs independently of this flag: connected devices are
+        always reported through the connection callbacks so file transfer
+        can be used without the relay. When the relay is enabled, newly
+        detected devices — and the device already connected, if any — get
+        the reverse tunnel and gnirehtet VPN configured.
+        """
+        self._relay_enabled = enabled
+        if enabled and self._current_device:
+            device_id = self._current_device
+            # Run off the caller's thread; APK install can take a while.
+            threading.Thread(
+                target=self._setup_relay_for_device,
+                args=(device_id,),
+                daemon=True,
+            ).start()
+
+    def is_relay_enabled(self) -> bool:
+        """Check whether relay-specific device setup is active."""
+        return self._relay_enabled
 
     # -- DeviceMonitor hooks --
 
@@ -216,13 +247,21 @@ class ADBMonitor(DeviceMonitor):
         """Handle new device connection."""
         self._log(f"Device detected: {device_id}", 'info')
 
-        # Set up reverse tunnel and start gnirehtet VPN
-        self._setup_reverse_tunnel(device_id)
-        self._install_and_start_gnirehtet(device_id)
-
         self._current_device = device_id
+
+        # Only configure the relay tunnel/VPN when the relay is enabled.
+        # Detection itself is relay-independent so the device can be used
+        # for file transfer without starting the relay.
+        if self._relay_enabled:
+            self._setup_relay_for_device(device_id)
+
         if self.on_device_connected:
             self.on_device_connected(device_id)
+
+    def _setup_relay_for_device(self, device_id: str):
+        """Configure the reverse tunnel and gnirehtet VPN for a device."""
+        self._setup_reverse_tunnel(device_id)
+        self._install_and_start_gnirehtet(device_id)
 
     def _on_device_lost(self, device_id: str):
         """Handle device disconnection."""

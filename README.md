@@ -69,6 +69,10 @@ USB reverse tethering allows a mobile device to use a computer's internet connec
 
 All selected files are pushed to `/sdcard/Download/` on the device.
 
+> **Note:** File transfer does not require the relay. As long as an Android
+> device is connected (in Android mode), you can upload files whether or not
+> the relay has been started.
+
 **macOS note**: Right-click and select "Open" (first time, to bypass Gatekeeper). You may need to allow the app in System Settings > Privacy & Security.
 
 ### Windows Mobile Mode (Windows only)
@@ -268,8 +272,8 @@ The first time USB tethering is enabled, Android will prompt for VPN permission.
 
 ### Upload button is greyed out
 
-The Upload button requires both a connected device and at least one selected file. Verify:
-1. The relay is started and device status shows "Connected"
+The Upload button requires both a connected device and at least one selected file (the relay does **not** need to be running). Verify:
+1. An Android device is connected and shows next to "Device:" — in Android mode, detection runs automatically without starting the relay
 2. At least one file is selected (switch to the Files tab and click "Add Files")
 
 ### Windows Mobile: Device connected but no internet
