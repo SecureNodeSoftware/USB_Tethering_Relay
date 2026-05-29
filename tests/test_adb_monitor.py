@@ -62,6 +62,17 @@ class TestRelayDecoupling(unittest.TestCase):
         self.monitor.set_relay_enabled(True)
         self.monitor._setup_relay_for_device.assert_not_called()
 
+    def test_stop_clears_relay_flag(self):
+        """Stopping the monitor clears relay setup so a later detection-only
+        restart does not configure the relay without an explicit re-enable."""
+        self.monitor.set_relay_enabled(True)
+        self.monitor.stop(kill_server=False)
+        self.assertFalse(self.monitor.is_relay_enabled())
+
+        # A device found after a bare restart must not trigger relay setup.
+        self.monitor._on_device_found('SERIAL123')
+        self.monitor._setup_relay_for_device.assert_not_called()
+
 
 if __name__ == '__main__':
     unittest.main()

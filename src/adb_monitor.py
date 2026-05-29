@@ -120,6 +120,10 @@ class ADBMonitor(DeviceMonitor):
     def stop(self, kill_server: bool = True):
         """Stop device monitoring and optionally kill ADB server."""
         super().stop()
+        # Relay setup is meaningless once monitoring stops; clear the flag so
+        # a later detection-only restart doesn't configure the relay on its
+        # own. Callers that want the relay re-enable it explicitly.
+        self._relay_enabled = False
         if kill_server:
             self._kill_adb_server()
 
