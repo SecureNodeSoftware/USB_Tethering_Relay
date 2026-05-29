@@ -657,6 +657,21 @@ class USBRelayApp:
             except ImportError:
                 self.wmdc_monitor = None
 
+        # Start ADB device detection up front (relay disabled) when Android
+        # is the selected mode, so file transfer is available as soon as a
+        # device is connected — no need to start the relay first.
+        if self.device_mode.get() == 'android':
+            self._ensure_adb_monitoring()
+
+    def _ensure_adb_monitoring(self):
+        """Start relay-independent ADB device detection if not already running.
+
+        Detection populates the connected device id used by file transfer,
+        regardless of whether the relay is running.
+        """
+        if self.adb_monitor and not self.adb_monitor.is_running():
+            self.adb_monitor.start()
+
     def _on_start(self):
         """Handle Start button click."""
         mode = self.device_mode.get()
@@ -676,7 +691,11 @@ class USBRelayApp:
             self.update_status('waiting')
         else:
             self.log("Starting relay server...", 'info')
-            self.adb_monitor.start()
+            # Detection may already be running (it starts independently of
+            # the relay); ensure it is, then enable relay-specific setup so
+            # the connected device gets the tunnel/VPN configured.
+            self._ensure_adb_monitoring()
+            self.adb_monitor.set_relay_enabled(True)
             self.relay_manager.start()
 
         self._active_mode = mode
@@ -690,23 +709,42 @@ class USBRelayApp:
             self.log("Stopping Windows Mobile tethering...", 'info')
             if self.wmdc_monitor:
                 self.wmdc_monitor.stop()
+            self.device_id = None
+            self.device_label.config(text="Device: None")
         else:
             self.log("Stopping relay server...", 'info')
             self.relay_manager.stop()
-            self.adb_monitor.stop()
+            # Disable relay-specific setup but keep detecting devices so file
+            # transfer stays available without the relay. The device id and
+            # upload button are intentionally left intact.
+            if self.adb_monitor:
+                self.adb_monitor.set_relay_enabled(False)
 
         self._active_mode = None
         self.update_status('stopped')
-        self.device_label.config(text="Device: None")
         self._update_upload_button_state()
 
 
     def _on_mode_change(self):
-        """Handle mode radio button change while running."""
-        if self._active_mode and self._active_mode != self.device_mode.get():
-            # Stop current mode in a background thread, then start new mode
-            # on the main thread to avoid freezing the GUI during cleanup.
+        """Handle mode radio button change."""
+        new_mode = self.device_mode.get()
+
+        if self._active_mode and self._active_mode != new_mode:
+            # A mode is actively running — stop current mode in a background
+            # thread, then start the new mode on the main thread to avoid
+            # freezing the GUI during cleanup.
             self._stop_managers_async(then=self._on_start)
+            return
+
+        # Nothing running: just follow the selected mode for background ADB
+        # detection so file-transfer availability tracks the chosen mode.
+        if new_mode == 'android':
+            self._ensure_adb_monitoring()
+        elif self.adb_monitor and self.adb_monitor.is_running():
+            self.adb_monitor.stop()
+            self.device_id = None
+            self.device_label.config(text="Device: None")
+            self._update_upload_button_state()
 
     def _on_relay_output(self, line: str):
         """Handle output from relay process."""
@@ -1001,7 +1039,9 @@ class USBRelayApp:
     def run(self):
         """Start the application."""
         self.log("USB Relay Manager started", 'info')
-        self.log("Click START to begin", 'info')
+        self.log("Click START to begin relaying", 'info')
+        self.log("File transfer is available whenever a device is connected — "
+                 "the relay does not need to be running", 'info')
 
         # Handle window close
         self.root.protocol("WM_DELETE_WINDOW", self._on_close)
